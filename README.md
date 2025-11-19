@@ -168,8 +168,6 @@ FANTASIA Lite V0 supports three embedding models:
 - **`ankh3`**: ANKH large protein language model (slower but potentially more accurate)
 - **`esm2`**: ESM-2 evolutionary scale modeling (fast, good for large-scale analysis)
 
-## Troubleshooting
-
 ### Common Issues
 - **CUDA compatibility**: Set `TORCH_INDEX` environment variable for specific CUDA versions
 - **Memory errors**: Use `--serial-models` and process one model at a time
@@ -184,86 +182,6 @@ FANTASIA Lite V0 supports three embedding models:
 ## File Format Support
 - **Input**: FASTA files (`.fa`, `.faa`, `.fasta`) and gzip-compressed versions (`.fa.gz`, `.fasta.gz`)
 - **Output**: CSV files for results, NPZ files for embeddings, TXT files for TopGO compatibility
-
-## Acknowledgements
-
-FANTASIA Lite V0 is derived from the full [FANTASIA pipeline](https://github.com/CBBIO/FANTASIA) and incorporates methods from [GOPredSim](https://github.com/Rostlab/goPredSim). Transformer models are provided via [Hugging Face](https://huggingface.co/).
-
-**Key Publications:**
-- [Performance of protein language models in model organisms](https://doi.org/10.1093/nargab/lqae078)
-- [Application of FANTASIA to functional annotation of dark proteomes](https://doi.org/10.1038/s42003-025-08651-2)
-- [Protocol explaining FANTASIA](https://doi.org/10.1007/978-1-0716-4623-6_8)
-
-**Contact:**
-- Ana M. Rojas Mendoza — a.rojas.m@csic.es
-- Rosa M. Fernandez — rosa.fernandez@ibe.upf-csic.es  
-- Àlex Dominguez Rodriguez — adomrod4@upo.es
-
----
-
-**Version**: FANTASIA Lite V0  
-**Last Updated**: November 2025
-
-## Multiple Proteomes
-- Use `multiProteome_launcher.sh` to sweep a directory of proteomes:
-  ```bash
-  ./multiProteome_launcher.sh -p ./proteomes -o ./proteome_outputs -m ./run_models.sh -- --serial-models
-  ```
-- The launcher iterates over `*.fasta` and `*.faa` files, calling your model runner for each proteome and writing results to the matching output directory.
-- **Important:** when several proteomes are queued, run one embedding model at a time. Either keep `--serial-models` enabled or set `SERIAL_MODELS=1` in the environment. Loading multiple large checkpoints while iterating across proteomes almost always exhausts RAM or GPU memory and slows the batch to a crawl.
-
-## Running the Pipeline
-- `fantasia_pipeline.py` orchestrates the full workflow:
-  - Creates or reuses `venv/` and installs the pinned requirements.
-  - Verifies that the lookup bundle is staged locally.
-  - Calls `generate_embeddings.py` for each requested model.
-  - Builds a short YAML config and executes `fantasia_no_db.py` for GO transfer.
-  - Collates outputs, including TopGO tables under `outputs/topgo/`.
-- Core flags:
-  - `--embed-models "prot_t5 esm2"` to choose one or more models (supported: prot_t5, esm2, ankh3; default `prot_t5`).
-  - `--serial-models` to enforce model-by-model execution (recommended for stability).
-  - `--limit-per-entry K` to keep the top `K` neighbours per query/model.
-  - `--topgo-dir path/` to place TopGO exports elsewhere.
-  - `--raw-results-csv file.csv` to persist the raw neighbour table when `K > 1`.
-
-## Outputs
-- `outputs/results.csv` – consolidated GO transfer table.
-- `outputs/query_embeddings.npz` – query embeddings for the submitted sequences.
-- `outputs/k.<K>.results.csv` – raw neighbours when `--limit-per-entry > 1`.
-- `outputs/topgo/<model>.topgo.<F|P|C>.txt` – TopGO lists per model and GO aspect.
-- `outputs/topgo/k.<model>.topgo.<F|P|C>.txt` – TopGO unions across the top `K` neighbours.
-- `outputs/failed_sequences.csv` – sequences skipped during embedding with the reason recorded.
-
-## Helper Scripts
-- `generate_embeddings.py` – computes embeddings with error reporting via `--failure-report`.
-- `fantasia_no_db.py` – performs in-memory nearest-neighbour lookup.
-- `run_models.sh` – example wrapper for the pipeline.
-- `multiProteome_launcher.sh` – batch helper for running the same model configuration across many proteomes.
-
-## Performance Analysis
-
-### Pipeline Timing Analyzer (`pipeline_timing_analyzer.py`)
-A comprehensive tool for analyzing pipeline performance across different hardware configurations and input files. This script is designed for:
-
-- **GPU Performance Comparison**: Compare processing times across different GPU models
-- **Hardware Benchmarking**: Evaluate pipeline performance on different systems
-- **Version Testing**: Assess performance changes between pipeline updates
-- **System Optimization**: Identify bottlenecks and optimal configurations
-
-#### Usage
-```bash
-# Basic timing analysis with test files
-python3 pipeline_timing_analyzer.py
-
-# Analyze with specific model and custom report
-python3 pipeline_timing_analyzer.py --model esm2 --report-csv gpu_benchmark.csv
-
-# Full customization
-python3 pipeline_timing_analyzer.py \
-    --fasta-dir fasta_test \
-    --model prot_t5 \
-    --report-csv timing_analysis.csv
-```
 
 #### Output Metrics
 The analyzer generates a CSV report with comprehensive metrics:
@@ -296,16 +214,22 @@ The analyzer generates a CSV report with comprehensive metrics:
 - **What if a sequence is too long?** It is recorded in `outputs/failed_sequences.csv`; the rest of the batch continues.
 - **Is ESM3c supported?** Not by default. Mirror the checkpoint locally and extend `MODEL_REGISTRY` if you need it.
 
+
 ## Acknowledgements
 
-Fantasia.SuperLite distils the full [FANTASIAv4](https://github.com/CBBIO/FANTASIA) workflow and draws inspiration from [GOPredSim](https://github.com/Rostlab/goPredSim). Transformer checkpoints are provided by [Hugging Face](https://huggingface.co/).
+FANTASIA Lite V0 is derived from the full [FANTASIA pipeline](https://github.com/CBBIO/FANTASIA) and incorporates methods from [GOPredSim](https://github.com/Rostlab/goPredSim). Transformer models are provided via [Hugging Face](https://huggingface.co/).
 
-**Publications**
+**Key Publications:**
 - [Performance of protein language models in model organisms](https://doi.org/10.1093/nargab/lqae078)
 - [Application of FANTASIA to functional annotation of dark proteomes](https://doi.org/10.1038/s42003-025-08651-2)
 - [Protocol explaining FANTASIA](https://doi.org/10.1007/978-1-0716-4623-6_8)
 
-**Contact**
+**Contact:**
 - Ana M. Rojas Mendoza — a.rojas.m@csic.es
-- Rosa M. Fernandez — rosa.fernandez@ibe.upf-csic.es
-- Àlex Dominguez Rodriguez - adomrod4@upo.es
+- Rosa M. Fernandez — rosa.fernandez@ibe.upf-csic.es  
+- Àlex Dominguez Rodriguez — adomrod4@upo.es
+
+---
+
+**Version**: FANTASIA Lite V0  
+**Last Updated**: November 2025
