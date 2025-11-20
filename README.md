@@ -186,22 +186,26 @@ python3 pipeline_timing_analyzer.py \
 
 ## Repository Structure
 ```
-FantasiaLiteV0/
-├── README.md                          # This documentation
+FANTASIA-Lite/
+├── README.md                                # This documentation
+├── LICENSE                                  # License information
+├── setup_and_test.sh                        # Automated setup and validation script
+├── .gitignore                               # Git ignore rules
 ├── data/
-│   └── lookup/                        # Lookup database (download from Zenodo)
-│       ├── accessions.json           # Protein accession mappings
-│       ├── annotations.json          # GO annotation data
-│       └── lookup_table.npz          # Pre-computed embeddings database
-├── fasta_test/                       # Test FASTA files for validation and benchmarking
-│   ├── UP000001940_6239.fasta       # C. elegans proteome sample
-│   ├── UP000002311_2025_10_19.fasta # Bacterial proteome sample
-│   ├── test.fa                      # Small test file (33 sequences)
-│   └── test_failure.fa              # Test file with problematic sequences
-├── fantasia_pipeline.py             # Main annotation pipeline
-├── fantasia_no_db.py                # Core lookup engine
-├── generate_embeddings.py           # Embedding generation module
-└── pipeline_timing_analyzer.py      # Performance analysis and benchmarking tool
+│   └── lookup/                              # Lookup database (download from Zenodo)
+│       ├── accessions.json                  # Protein accession mappings
+│       ├── annotations.json                 # GO annotation data
+│       └── lookup_table.npz                 # Pre-computed embeddings database
+├── fasta_test/                              # Test FASTA files for validation and benchmarking
+│   ├── test.fa                              # Small test file (33 sequences)
+│   ├── test_failure.fa                      # Test file with problematic sequences
+│   ├── UP000001940_6239.fasta               # C. elegans proteome sample
+│   ├── UP000002311_2025_10_19.fasta         # Bacterial proteome sample
+│   └── GCF_000001735.4_TAIR10.1_protein.faa # A. thaliana proteome sample
+├── fantasia_pipeline.py                     # Main annotation pipeline
+├── fantasia_no_db.py                        # Core lookup engine
+├── generate_embeddings.py                   # Embedding generation module
+└── pipeline_timing_analyzer.py              # Performance analysis and benchmarking tool
 ```
 
 ### Test Files (`fasta_test/`)
@@ -210,6 +214,7 @@ The repository includes comprehensive test files for validation and benchmarking
 - **`test_failure.fa`**: Contains problematic sequences to test error handling
 - **`UP000001940_6239.fasta`**: Complete C. elegans proteome for realistic testing
 - **`UP000002311_2025_10_19.fasta`**: Bacterial proteome sample for diversity testing
+- **`GCF_000001735.4_TAIR10.1_protein.faa`**: Arabidopsis thaliana proteome for plant protein testing
 
 ## Outputs
 
@@ -244,6 +249,42 @@ The `pipeline_timing_analyzer.py` tool provides comprehensive benchmarking capab
 - **Scalability Testing**: Analyze performance across different file sizes and sequence counts
 - **Regression Testing**: Track performance changes across pipeline versions
 - **Resource Monitoring**: GPU memory usage and processing rate analysis
+
+## Performance Benchmarks
+
+The following benchmarks provide realistic performance expectations across different GPU configurations:
+
+### NVIDIA A100-SXM4-40GB (40 GB VRAM)
+
+| Dataset | Sequences | Model | Runtime | Rate (seq/s) | Annotations | Failed |
+|---------|-----------|-------|---------|--------------|-------------|---------|
+| **A. thaliana proteome** | 48,265 | ProtT5 | 1h 50m | 7.30 | 173,940 | 0 |
+| (GCF_000001735.4) | | Ankh3 | 1h 57m | 6.85 | 177,848 | 0 |
+| **C. elegans proteome** | 19,831 | ProtT5 | 1h 41m | 3.27 | 73,636 | 3 |
+| (UP000001940_6239) | | Ankh3 | 50m | 6.58 | 75,837 | 2 |
+| **Bacterial proteome** | 6,067 | ProtT5 | 16m 33s | 6.11 | 32,265 | 0 |
+| (UP000002311) | | Ankh3 | 15m 38s | 6.47 | 32,547 | 0 |
+| **Small test file** | 33 | ProtT5 | 1m 38s | 0.34 | 139 | 0 |
+| (test.fa) | | Ankh3 | 1m 3s | 0.52 | 142 | 0 |
+| **Problematic sequences** | 176 | ProtT5 | 8m 31s | 0.34 | 360 | 65 |
+| (test_failure.fa) | | Ankh3 | 11m 38s | 0.25 | 932 | 31 |
+
+### NVIDIA GeForce RTX 3090 Ti (24 GB VRAM)
+
+| Dataset | Sequences | Model | Runtime | Rate (seq/s) | Annotations | Failed |
+|---------|-----------|-------|---------|--------------|-------------|---------|
+| **A. thaliana proteome** | 48,265 | ProtT5 | 1h 23m | 9.71 | 173,940 | 0 |
+| (GCF_000001735.4) | | Ankh3 | 1h 28m | 9.15 | 177,848 | 0 |
+| **C. elegans proteome** | 19,831 | ProtT5 | 33m 24s | 9.90 | 73,593 | 11 |
+| (UP000001940_6239) | | Ankh3 | 35m 16s | 9.37 | 75,803 | 6 |
+| **Bacterial proteome** | 6,067 | ProtT5 | 11m 32s | 8.77 | 32,265 | 0 |
+| (UP000002311) | | Ankh3 | 12m 13s | 8.28 | 32,547 | 0 |
+| **Small test file** | 33 | ProtT5 | 21s | 1.54 | 139 | 0 |
+| (test.fa) | | Ankh3 | 12s | 2.70 | 142 | 0 |
+| **Problematic sequences** | 176 | ProtT5 | 33s | 5.33 | 41 | 171 |
+| (test_failure.fa) | | Ankh3 | 6m 6s | 0.48 | 550 | 71 |
+
+*All benchmarks performed with `--serial-models` flag (November 2025). The RTX 3090 Ti shows significantly faster processing rates, particularly beneficial for large-scale proteome annotation.*
 
 ## Advanced Usage
 
