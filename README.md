@@ -419,15 +419,15 @@ If you use FANTASIA in your research, please cite the following publications:
 - Barrios-Núñez, I., Martínez-Redondo, G. I., Medina-Burgos, P., Cases, I., Fernández, R., & Rojas, A. M. (2024). Decoding proteome functional information in model organisms using protein language models.
     DOI: 10.1101/2024.02.14.580341
 
-
 **Project Team:**
-Ana M. Rojas: a.rojas.m@csic.es
-Rosa Fernández: rosa.fernandez@ibe.upf-csic.es
-Gemma I. Martínez-Redondo: gemma.martinez@ibe.upf-csic.es
-Francisco Miguel Pérez Canales: fmpercan@upo.es
-Belén Carbonetto: belen.carbonetto.metazomics@gmail.com
-Àlex Domínguez Rodríguez: adomrod4@upo.es
-
+- Ana M. Rojas: a.rojas.m@csic.es
+- Rosa Fernández: rosa.fernandez@ibe.upf-csic.es
+- Aureliano Bombarely: abombarely@ibmcp.upv.es
+- Àlex Domínguez Rodríguez: adomrod4@upo.es
+- Gemma I. Martínez-Redondo: gemma.martinez@ibe.upf-csic.es
+- Belén Carbonetto: belen.carbonetto.metazomics@gmail.com
+- Iñigo de Martín: imartinagirre@gmail.com
+- Sofía García Juan
 ---
 
 **Version**: FANTASIA Lite V0  
