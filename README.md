@@ -15,7 +15,7 @@ For advanced features, large-scale annotation, or integration with external data
 
 ## What You Need
 - Python 3.10 or newer (the pipeline automatically creates and manages virtual environments)
-- Lookup bundle (`lookup_table.npz`, `annotations.json`, `accessions.json`) from [Zenodo: 17393454](https://zenodo.org/records/17393454) placed in `data/lookup/`
+- Lookup bundle (`lookup_table.npz`, `annotations.json`, `accessions.json`) from [Zenodo: 17630193](https://zenodo.org/records/17630193) placed in `data/lookup/`
 - Internet connection for automatic dependency installation
 - Sufficient disk space for outputs and embeddings (approximately 1-2 GB per run)
 - Git (for cloning the repository)
