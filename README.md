@@ -1,6 +1,17 @@
+
 # FANTASIA Lite V0
 
-FANTASIA Lite V0 is a streamlined version of the FANTASIA pipeline designed for efficient GO annotation transfer on local FASTA files. This lightweight Python implementation provides protein functional annotation through embedding-based nearest-neighbor lookup without requiring the full FANTASIA infrastructure.
+**FANTASIA Lite V0** is a streamlined, standalone version of the full [FANTASIA pipeline](https://github.com/CBBIO/FANTASIA), designed for fast and efficient Gene Ontology (GO) annotation of protein sequences from local FASTA files.
+
+FANTASIA Lite leverages state-of-the-art protein language models (ProtT5, Ankh3, ESM2) to generate deep learning embeddings and perform nearest-neighbor annotation transfer—without requiring a database server or the full FANTASIA infrastructure.
+
+This repository is ideal for users who want:
+- Lightweight, local annotation of protein FASTA files
+- No external database dependencies
+- Simple setup and automated environment management
+- High-quality functional annotation using experimental evidence from UniProt
+
+For advanced features, large-scale annotation, or integration with external databases, see the full [FANTASIA repository](https://github.com/CBBIO/FANTASIA).
 
 ## What You Need
 - Python 3.10 or newer (the pipeline automatically creates and manages virtual environments)
@@ -254,20 +265,35 @@ The `pipeline_timing_analyzer.py` tool provides comprehensive benchmarking capab
 
 The following benchmarks provide realistic performance expectations across different GPU configurations:
 
-### NVIDIA A100-SXM4-40GB (40 GB VRAM)
+### NVIDIA RTX A2000 12GB (12 GB VRAM)
 
 | Dataset | Sequences | Model | Runtime | Rate (seq/s) | Annotations | Failed |
 |---------|-----------|-------|---------|--------------|-------------|---------|
-| **A. thaliana proteome** | 48,265 | ProtT5 | 1h 50m | 7.30 | 173,940 | 0 |
-| (GCF_000001735.4) | | Ankh3 | 1h 57m | 6.85 | 177,848 | 0 |
-| **C. elegans proteome** | 19,831 | ProtT5 | 1h 41m | 3.27 | 73,636 | 3 |
-| (UP000001940_6239) | | Ankh3 | 50m | 6.58 | 75,837 | 2 |
-| **Bacterial proteome** | 6,067 | ProtT5 | 16m 33s | 6.11 | 32,265 | 0 |
-| (UP000002311) | | Ankh3 | 15m 38s | 6.47 | 32,547 | 0 |
-| **Small test file** | 33 | ProtT5 | 1m 38s | 0.34 | 139 | 0 |
-| (test.fa) | | Ankh3 | 1m 3s | 0.52 | 142 | 0 |
-| **Problematic sequences** | 176 | ProtT5 | 8m 31s | 0.34 | 360 | 65 |
-| (test_failure.fa) | | Ankh3 | 11m 38s | 0.25 | 932 | 31 |
+| **A. thaliana proteome** | 48,265 | ProtT5 | 4h 2m | 3.32 | 155,720 | 3,929 |
+| (GCF_000001735.4) | | Ankh3 | 4h 52m | 2.76 | 177,643 | 35 |
+| **C. elegans proteome** | 19,831 | ProtT5 | 1h 30m | 3.69 | 65,543 | 1,411 |
+| (UP000001940_6239) | | Ankh3 | 1h 53m | 2.93 | 75,543 | 45 |
+| **Bacterial proteome** | 6,067 | ProtT5 | 30m 34s | 3.31 | 27,380 | 705 |
+| (UP000002311) | | Ankh3 | 41m 42s | 2.43 | 32,475 | 7 |
+| **Small test file** | 33 | ProtT5 | 28s | 1.18 | 132 | 1 |
+| (test.fa) | | Ankh3 | 18s | 1.84 | 142 | 0 |
+| **Problematic sequences** | 176 | ProtT5 | 29s | 6.08 | 34 | 172 |
+| (test_failure.fa) | | Ankh3 | 20s | 8.83 | 41 | 171 |
+
+### Tesla T4 (15 GB VRAM)
+
+| Dataset | Sequences | Model | Runtime | Rate (seq/s) | Annotations | Failed |
+|---------|-----------|-------|---------|--------------|-------------|---------|
+| **A. thaliana proteome** | 48,265 | ProtT5 | 6h 44m | 1.99 | 173,586 | 55 |
+| (GCF_000001735.4) | | Ankh3 | 7h 17m | 1.84 | 177,830 | 3 |
+| **C. elegans proteome** | 19,831 | ProtT5 | 2h 27m | 2.25 | 73,264 | 62 |
+| (UP000001940_6239) | | Ankh3 | 2h 30m | 2.21 | 75,776 | 12 |
+| **Bacterial proteome** | 6,067 | ProtT5 | 54m 8s | 1.87 | 32,187 | 8 |
+| (UP000002311) | | Ankh3 | 54m 53s | 1.84 | 32,540 | 1 |
+| **Small test file** | 33 | ProtT5 | 56s | 0.59 | 139 | 0 |
+| (test.fa) | | Ankh3 | 45s | 0.77 | 142 | 0 |
+| **Problematic sequences** | 176 | ProtT5 | 58s | 3.05 | 41 | 171 |
+| (test_failure.fa) | | Ankh3 | 2m 33s | 1.23 | 44 | 170 |
 
 ### NVIDIA GeForce RTX 3090 Ti (24 GB VRAM)
 
@@ -284,7 +310,22 @@ The following benchmarks provide realistic performance expectations across diffe
 | **Problematic sequences** | 176 | ProtT5 | 33s | 5.33 | 41 | 171 |
 | (test_failure.fa) | | Ankh3 | 6m 6s | 0.48 | 550 | 71 |
 
-*All benchmarks performed with `--serial-models` flag (November 2025). The RTX 3090 Ti shows significantly faster processing rates, particularly beneficial for large-scale proteome annotation.*
+### NVIDIA A100-SXM4-40GB (40 GB VRAM)
+
+| Dataset | Sequences | Model | Runtime | Rate (seq/s) | Annotations | Failed |
+|---------|-----------|-------|---------|--------------|-------------|---------|
+| **A. thaliana proteome** | 48,265 | ProtT5 | 1h 50m | 7.30 | 173,940 | 0 |
+| (GCF_000001735.4) | | Ankh3 | 1h 57m | 6.85 | 177,848 | 0 |
+| **C. elegans proteome** | 19,831 | ProtT5 | 1h 41m | 3.27 | 73,636 | 3 |
+| (UP000001940_6239) | | Ankh3 | 50m | 6.58 | 75,837 | 2 |
+| **Bacterial proteome** | 6,067 | ProtT5 | 16m 33s | 6.11 | 32,265 | 0 |
+| (UP000002311) | | Ankh3 | 15m 38s | 6.47 | 32,547 | 0 |
+| **Small test file** | 33 | ProtT5 | 1m 38s | 0.34 | 139 | 0 |
+| (test.fa) | | Ankh3 | 1m 3s | 0.52 | 142 | 0 |
+| **Problematic sequences** | 176 | ProtT5 | 8m 31s | 0.34 | 360 | 65 |
+| (test_failure.fa) | | Ankh3 | 11m 38s | 0.25 | 932 | 31 |
+
+*All benchmarks performed with `--serial-models` flag (November 2025). The RTX 3090 Ti shows significantly faster processing rates, particularly beneficial for large-scale proteome annotation. The RTX A2000 12GB shows lower performance and higher failure rates due to memory constraints, but remains functional for most workloads. Tesla T4 values of the **Small test file** and **Problematic sequences** are averaged across 2 runs per configuration.*
 
 ## Advanced Usage
 
@@ -368,10 +409,24 @@ FANTASIA Lite V0 is derived from the full [FANTASIA pipeline](https://github.com
 - [Application of FANTASIA to functional annotation of dark proteomes](https://doi.org/10.1038/s42003-025-08651-2)
 - [Protocol explaining FANTASIA](https://doi.org/10.1007/978-1-0716-4623-6_8)
 
-**Contact:**
-- Ana M. Rojas Mendoza — a.rojas.m@csic.es
-- Rosa M. Fernandez — rosa.fernandez@ibe.upf-csic.es  
-- Àlex Dominguez Rodriguez — adomrod4@upo.es
+**Citing FANTASIA**
+
+If you use FANTASIA in your research, please cite the following publications:
+
+- Martínez-Redondo, G. I., Barrios, I., Vázquez-Valls, M., Rojas, A. M., & Fernández, R. (2024).Illuminating the functional landscape of the dark proteome across the Animal Tree of Life.
+    DOI: 10.1101/2024.02.28.582465
+
+- Barrios-Núñez, I., Martínez-Redondo, G. I., Medina-Burgos, P., Cases, I., Fernández, R., & Rojas, A. M. (2024). Decoding proteome functional information in model organisms using protein language models.
+    DOI: 10.1101/2024.02.14.580341
+
+
+**Project Team:**
+Ana M. Rojas: a.rojas.m@csic.es
+Rosa Fernández: rosa.fernandez@ibe.upf-csic.es
+Gemma I. Martínez-Redondo: gemma.martinez@ibe.upf-csic.es
+Francisco Miguel Pérez Canales: fmpercan@upo.es
+Belén Carbonetto: belen.carbonetto.metazomics@gmail.com
+Àlex Domínguez Rodríguez: adomrod4@upo.es
 
 ---
 
