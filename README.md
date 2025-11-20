@@ -7,6 +7,69 @@ FANTASIA Lite V0 is a streamlined version of the FANTASIA pipeline designed for 
 - Lookup bundle (`lookup_table.npz`, `annotations.json`, `accessions.json`) from [Zenodo: 17393454](https://zenodo.org/records/17393454) placed in `data/lookup/`
 - Internet connection for automatic dependency installation
 - Sufficient disk space for outputs and embeddings (approximately 1-2 GB per run)
+- Git (for cloning the repository)
+- `wget` or `curl` (for downloading the lookup bundle)
+
+## Getting Started
+
+### Step 1: Clone the Repository
+```bash
+git clone https://github.com/CBBIO/FANTASIA-Lite.git
+cd FANTASIA-Lite
+```
+
+### Step 2: Run Setup and Test Script
+The easiest way to get started is to use the automated setup script:
+
+```bash
+./setup_and_test.sh
+```
+
+**What this script does:**
+
+1. **Creates directory structure** (`data/lookup/`)
+   - Sets up the necessary folders for lookup files
+
+2. **Downloads lookup bundle** from Zenodo (~2-3 GB)
+   - Fetches `fantasia_lookup_bundle.tgz` containing pre-computed embeddings
+   - Skips download if the file already exists
+   - Uses `wget` or `curl` depending on what's available on your system
+
+3. **Extracts lookup files**
+   - Automatically detects the archive structure
+   - Places files in the correct location (`data/lookup/`)
+   - Verifies that all three required files are present:
+     - `lookup_table.npz` - Pre-computed protein embeddings database
+     - `annotations.json` - GO annotation data
+     - `accessions.json` - Protein accession mappings
+   - Skips extraction if files already exist
+
+4. **Runs validation test**
+   - Executes: `python3 fantasia_pipeline.py --serial-models --embed-models prot_t5 fasta_test/test.fa`
+   - Creates a Python virtual environment automatically (first run only)
+   - Installs all required dependencies (PyTorch, transformers, etc.)
+   - Processes 33 test sequences using the ProtT5 model
+   - Generates output in a timestamped directory (`outputs_YYYYMMDD_HHMMSS/`)
+   - Confirms the pipeline is working correctly
+
+**Expected output**: If everything works correctly, you'll see:
+- Download progress and extraction confirmation
+- Virtual environment creation (first run)
+- Dependency installation progress
+- Embedding generation progress bar
+- Annotation results written to the output directory
+- Success message
+
+**Time estimate**: 
+- First run: 10-20 minutes (includes downloads and dependency installation)
+- Subsequent runs: 1-2 minutes (only processes test file)
+
+### Step 3: Process Your Own Data
+Once the test completes successfully, you can annotate your own protein sequences:
+
+```bash
+python3 fantasia_pipeline.py --serial-models --embed-models prot_t5 your_proteins.fa
+```
 
 ## Quick Start
 
@@ -110,10 +173,16 @@ Each pipeline run creates a timestamped directory containing:
 
 ### Timing Analyzer Outputs
 - **`pipeline_timing_analysis.csv`**: Comprehensive performance metrics including:
+  - GPU model and memory specifications
   - Runtime and processing rates
   - GPU/CPU usage information  
   - Sequence processing statistics
+  - Successfully processed vs failed sequences
+  - GPU memory usage monitoring
   - Model comparison data
+  - Timestamped pipeline output directory references
+
+**Note**: Requires nvidia-smi for GPU monitoring (optional for CPU-only systems).
 
 ## Performance Analysis Features
 
@@ -168,46 +237,29 @@ FANTASIA Lite V0 supports three embedding models:
 - **`ankh3`**: ANKH large protein language model (slower but potentially more accurate)
 - **`esm2`**: ESM-2 evolutionary scale modeling (fast, good for large-scale analysis)
 
+## File Format Support
+- **Input**: FASTA files (`.fa`, `.faa`, `.fasta`) and gzip-compressed versions (`.fa.gz`, `.fasta.gz`)
+- **Output**: CSV files for results, NPZ files for embeddings, TXT files for TopGO compatibility
+
+## Troubleshooting
+
 ### Common Issues
 - **CUDA compatibility**: Set `TORCH_INDEX` environment variable for specific CUDA versions
 - **Memory errors**: Use `--serial-models` and process one model at a time
 - **Missing dependencies**: The pipeline automatically installs required packages
 - **Lookup bundle missing**: Download from Zenodo and extract to `data/lookup/`
+- **Out-of-memory errors**: Reduce `--embed-models` to a single model and keep `--serial-models` enabled
 
 ### Performance Optimization
 - **GPU memory**: Use `--serial-models` to prevent multiple models loading simultaneously
 - **Processing speed**: Start with `prot_t5` model for fastest results
 - **Large files**: Increase `--chunk-size` for better memory management
 
-## File Format Support
-- **Input**: FASTA files (`.fa`, `.faa`, `.fasta`) and gzip-compressed versions (`.fa.gz`, `.fasta.gz`)
-- **Output**: CSV files for results, NPZ files for embeddings, TXT files for TopGO compatibility
-
-#### Output Metrics
-The analyzer generates a CSV report with comprehensive metrics:
-- GPU model and memory specifications
-- Runtime in seconds for each FASTA file
-- Processing rate (sequences per second)
-- Successfully processed vs failed sequences
-- GPU memory usage monitoring
-- Timestamped pipeline output directory references
-
-#### Important Notes
+### Important Notes
+- Gzipped FASTA files are decompressed on the fly; no manual prep is required
+- Sequences longer than the model limit are skipped and logged; other sequences continue
 - Each pipeline run creates a timestamped directory (`outputs_YYYYMMDD_HHMMSS`)
-- No intermediate batch directories are created
-- Uses the same test files in `fasta_test/` for consistent comparison
-- Requires nvidia-smi for GPU monitoring (optional for CPU-only systems)
-
-
-## Advanced Notes
-- Gzipped FASTA files are decompressed on the fly; no manual prep is required.
-- Sequences longer than the model limit are skipped and logged; other sequences continue.
-- Parallel model execution is technically possible but rarely worth the memory cost. Prefer sequential runs and clear GPU memory between models if required.
-
-## Troubleshooting
-- **CUDA wheel mismatch:** set `TORCH_INDEX` to match your CUDA version or run on CPU (`export CUDA_VISIBLE_DEVICES=""`).
-- **Lookup bundle missing:** download the Zenodo archive and extract into `data/lookup/`.
-- **Out-of-memory errors:** reduce `--embed-models` to a single model and keep `--serial-models` enabled.
+- Parallel model execution is technically possible but rarely worth the memory cost
 
 ## FAQ
 - **Can I use `.gz` FASTA files?** Yes. Compression is handled automatically.
