@@ -10,6 +10,57 @@ FANTASIA Lite V0 is a streamlined version of the FANTASIA pipeline designed for 
 - Git (for cloning the repository)
 - `wget` or `curl` (for downloading the lookup bundle)
 
+## Lookup Table Details
+
+The FANTASIA Lite V0 lookup table is built from the **UniProt November 2025 release** and includes only proteins with experimental evidence, ensuring high-quality functional annotations. All data was generated using PIS v3.1.0, the internal system used to extract and preprocess UniProt, PDB, and GOA data.
+
+### Core Statistics
+- **Total accessions**: 127,546 UniProt entries
+- **Total proteins**: 127,546 protein records
+- **Total unique sequences**: 124,397 (3,149 proteins share identical sequences due to isoforms and redundancy)
+- **Total GO annotations**: 627,932 experimental annotations
+- **Sequence redundancy**: 2.47%
+
+### Embedding Coverage
+- **ProtT5-XL-UniRef50**: 124,397 embeddings (100% coverage)
+- **Ankh3-Large**: 124,397 embeddings (100% coverage)
+
+### Package Contents
+The lookup bundle (`fantasia_lookup_bundle.tgz`) contains three essential files:
+
+1. **`lookup_table.npz`**
+   - Precomputed protein embeddings (ProtT5 and Ankh3)
+   - Last-layer compressed embeddings for all reference sequences
+   - Enables fast nearest-neighbor search during annotation
+   - Format: NumPy .npz archive
+
+2. **`annotations.json`**
+   - GO annotations of the reference proteins
+   - Experimentally supported GO terms by category:
+     - **F**: Molecular Function
+     - **P**: Biological Process
+     - **C**: Cellular Component
+   - Format: JSON mapping from proteins to their GO terms
+
+3. **`accessions.json`**
+   - Mapping of internal indices to UniProt accessions
+   - Contains UniProt ID, metadata, and sequence length
+   - Allows the pipeline to retrieve source identifiers
+   - Format: JSON list/dict
+
+### GO Evidence Codes (Experimental Only)
+The lookup table includes only high-confidence experimental annotations:
+- **EXP** — Inferred from Experiment
+- **IDA** — Inferred from Direct Assay
+- **IPI** — Inferred from Physical Interaction
+- **IMP** — Inferred from Mutant Phenotype
+- **IGI** — Inferred from Genetic Interaction
+- **IEP** — Inferred from Expression Pattern
+- **TAS** — Traceable Author Statement
+- **IC** — Inferred by Curator
+
+No database server or external dependencies are required.
+
 ## Getting Started
 
 ### Step 1: Clone the Repository
