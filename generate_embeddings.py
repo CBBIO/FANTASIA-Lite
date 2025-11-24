@@ -6,7 +6,6 @@ generate_embeddings.py
 This script computes protein sequence embeddings for a small FASTA file
 using three pretrained protein language models used by the FANTASIA pipeline:
 
-  * **ESM‑2**: `facebook/esm2_t33_650M_UR50D`
   * **ProtT5**: `Rostlab/prot_t5_xl_uniref50`
   * **Ankh3‑Large**: `ElnaggarLab/ankh3-large`
 
@@ -101,12 +100,6 @@ import re
 #             associate query embeddings with the corresponding reference
 #             model.
 MODEL_REGISTRY: Dict[str, Dict[str, object]] = {
-    # ESM‑2 model.  The lookup table uses the key ``ESM`` for this model.
-    "esm2": {
-        "hf_id": "facebook/esm2_t33_650M_UR50D",
-        "key": "ESM",
-        "tokenizer_use_fast": False,
-    },
     # ProtT5 model.  The lookup table refers to this model as ``Prot-T5``.
     "prot_t5": {
         "hf_id": "Rostlab/prot_t5_xl_uniref50",
