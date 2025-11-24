@@ -26,7 +26,7 @@ For advanced features, large-scale annotation, or integration with external data
 
 The FANTASIA Lite V0 lookup table is built from the **UniProt November 2025 release** and includes only proteins with experimental evidence, ensuring high-quality functional annotations. All data was generated using PIS v3.1.0, the internal system used to extract and preprocess UniProt, PDB, and GOA data.
 
-**Lookup bundle Zenodo DOI:** [10.5281/zenodo.17630193](https://doi.org/10.5281/zenodo.17630193)
+**Lookup bundle Zenodo DOI:** [10.5281/zenodo.17700779](https://doi.org/10.5281/zenodo.17700779)
 
 Use this DOI to cite the lookup table or to access the official download page.
 
