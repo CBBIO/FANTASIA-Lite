@@ -3,7 +3,7 @@
 
 **FANTASIA Lite V0** is a streamlined, standalone version of the full [FANTASIA pipeline](https://github.com/CBBIO/FANTASIA), designed for fast and efficient Gene Ontology (GO) annotation of protein sequences from local FASTA files.
 
-FANTASIA Lite leverages state-of-the-art protein language models (ProtT5, Ankh3, ESM2) to generate deep learning embeddings and perform nearest-neighbor annotation transfer—without requiring a database server or the full FANTASIA infrastructure.
+FANTASIA Lite leverages state-of-the-art protein language models (ProtT5, Ankh3) to generate deep learning embeddings and perform nearest-neighbor annotation transfer—without requiring a database server or the full FANTASIA infrastructure.
 
 This repository is ideal for users who want:
 - Lightweight, local annotation of protein FASTA files
