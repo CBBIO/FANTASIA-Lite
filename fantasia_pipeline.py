@@ -38,7 +38,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, TextIO
 
 
 DEFAULT_EMBED_MODELS = "prot_t5"
-SUPPORTED_EMBED_MODELS = {"prot_t5", "esm2", "ankh3"}
+SUPPORTED_EMBED_MODELS = {"prot_t5", "ankh3"}
 DEFAULT_CHUNK_SIZE = 500
 DEFAULT_LIMIT_PER_ENTRY = 1
 DEFAULT_DISTANCE_METRIC = "cosine"
@@ -231,7 +231,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--embed-models",
         default=None,
         help=(
-            "Space-separated list of embedding models (choices: prot_t5, esm2, ankh3; "
+            "Space-separated list of embedding models (choices: prot_t5, ankh3; "
             "default from env or 'prot_t5')."
         ),
     )
