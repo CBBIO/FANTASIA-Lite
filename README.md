@@ -42,7 +42,7 @@ Use this DOI to cite the lookup table or to access the official download page.
 - **Ankh3-Large**: 124,397 embeddings (100% coverage)
 
 ### Package Contents
-The lookup bundle (`fantasia_lookup_bundle.tgz`) contains three essential files:
+The lookup bundle (`fantasia_lite_data_folder.tgz`) contains three essential files:
 
 1. **`lookup_table.npz`**
    - Precomputed protein embeddings (ProtT5 and Ankh3)
