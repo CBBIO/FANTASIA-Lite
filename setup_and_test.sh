@@ -25,8 +25,8 @@ echo "[1/4] Creating data/lookup directory..."
 mkdir -p data/lookup
 
 # Download the lookup bundle
-ZENODO_URL="https://zenodo.org/records/17630193/files/fantasia_lite_lookup_table.zip"
-BUNDLE_FILE="fantasia_lite_lookup_table.zip"
+ZENODO_URL="https://zenodo.org/records/17700779/files/fantasia_lite_data_folder.zip"
+BUNDLE_FILE="fantasia_lite_data_folder.zip"
 
 echo "[2/4] Downloading lookup bundle from Zenodo..."
 echo "URL: $ZENODO_URL"
