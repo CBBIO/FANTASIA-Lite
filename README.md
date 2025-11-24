@@ -164,7 +164,7 @@ python3 fantasia_pipeline.py \
 ```
 
 **Key Options:**
-- `--embed-models`: Choose models (`prot_t5`, `ankh3`, `esm2`) - default: `prot_t5`
+- `--embed-models`: Choose models (`prot_t5`, `ankh3`) - default: `prot_t5`
 - `--serial-models`: Process models sequentially (recommended for memory efficiency)
 - `--limit-per-entry N`: Return top N annotations per sequence (default: 1)
 
@@ -261,7 +261,7 @@ Each pipeline run creates a timestamped directory containing:
 The `pipeline_timing_analyzer.py` tool provides comprehensive benchmarking capabilities:
 
 - **Hardware Comparison**: Compare GPU vs CPU performance across different systems
-- **Model Evaluation**: Systematic comparison between prot_t5, ankh3, and esm2 models  
+- **Model Evaluation**: Systematic comparison between prot_t5 and ankh3 models  
 - **Scalability Testing**: Analyze performance across different file sizes and sequence counts
 - **Regression Testing**: Track performance changes across pipeline versions
 - **Resource Monitoring**: GPU memory usage and processing rate analysis
@@ -373,7 +373,6 @@ python3 fantasia_pipeline.py \
 FANTASIA Lite V0 supports three embedding models:
 - **`prot_t5`**: Protein T5 model (recommended, good balance of speed and accuracy)
 - **`ankh3`**: ANKH large protein language model (slower but potentially more accurate)
-- **`esm2`**: ESM-2 evolutionary scale modeling (fast, good for large-scale analysis)
 
 ## File Format Support
 - **Input**: FASTA files (`.fa`, `.faa`, `.fasta`) and gzip-compressed versions (`.fa.gz`, `.fasta.gz`)
