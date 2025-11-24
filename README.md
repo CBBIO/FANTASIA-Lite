@@ -427,6 +427,7 @@ If you use FANTASIA in your research, please cite the following publications:
 - Ana M. Rojas: a.rojas.m@csic.es
 - Rosa Fernández: rosa.fernandez@ibe.upf-csic.es
 - Aureliano Bombarely: abombarely@ibmcp.upv.es
+- Ildefonso Cases: icasdia@upo.es
 - Àlex Domínguez Rodríguez: adomrod4@upo.es
 - Gemma I. Martínez-Redondo: gemma.martinez@ibe.upf-csic.es
 - Belén Carbonetto: belen.carbonetto.metazomics@gmail.com
@@ -436,3 +437,4 @@ If you use FANTASIA in your research, please cite the following publications:
 
 **Version**: FANTASIA Lite V0  
 **Last Updated**: November 2025
+**Funded by** EOSC-OSCARS Fun4Biodiversity
