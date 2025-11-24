@@ -98,7 +98,7 @@ The easiest way to get started is to use the automated setup script:
    - Sets up the necessary folders for lookup files
 
 2. **Downloads lookup bundle** from Zenodo (~2-3 GB)
-   - Fetches `fantasia_lookup_bundle.tgz` containing pre-computed embeddings
+   - Fetches `fantasia_lite_data_folder.tgz` containing pre-computed embeddings
    - Skips download if the file already exists
    - Uses `wget` or `curl` depending on what's available on your system
 
