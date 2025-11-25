@@ -52,11 +52,11 @@ else
     
     # Check if the archive contains a nested directory structure
     echo "Inspecting archive structure..."
-    ARCHIVE_CONTENTS=$(tar -tzf "$BUNDLE_FILE" | head -5)
+    ARCHIVE_CONTENTS=$(unzip -l "$BUNDLE_FILE" | head -5)
     
     # Extract to temporary location first
     TEMP_DIR=$(mktemp -d)
-    tar -xzf "$BUNDLE_FILE" -C "$TEMP_DIR"
+    unzip -q "$BUNDLE_FILE" -d "$TEMP_DIR"
     
     # Find the actual files and move them to the correct location
     LOOKUP_NPZ=$(find "$TEMP_DIR" -name "lookup_table.npz" -type f)
