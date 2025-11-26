@@ -15,7 +15,7 @@ For advanced features, large-scale annotation, or integration with external data
 
 ## What You Need
 - Python 3.10 or newer (the pipeline automatically creates and manages virtual environments)
-- Lookup bundle (`lookup_table.npz`, `annotations.json`, `accessions.json`) from [Zenodo: 17700779](https://zenodo.org/records/17700779) placed in `data/lookup/`
+- Lookup bundle (`lookup_table.npz`, `annotations.json`, `accessions.json`) from [Zenodo: 17720428](https://zenodo.org/records/17720428) placed in `data/lookup/`
 - Internet connection for automatic dependency installation
 - Sufficient disk space for outputs and embeddings (approximately 1-2 GB per run)
 - Git (for cloning the repository)
@@ -26,7 +26,7 @@ For advanced features, large-scale annotation, or integration with external data
 
 The FANTASIA Lite V0 lookup table is built from the **UniProt November 2025 release** and includes only proteins with experimental evidence, ensuring high-quality functional annotations. All data was generated using PIS v3.1.0, the internal system used to extract and preprocess UniProt, PDB, and GOA data.
 
-**Lookup bundle Zenodo DOI:** [10.5281/zenodo.17700779](https://doi.org/10.5281/zenodo.17700779)
+**Lookup bundle Zenodo DOI:** [10.5281/zenodo.17720428](https://doi.org/10.5281/zenodo.17720428)
 
 Use this DOI to cite the lookup table or to access the official download page.
 
