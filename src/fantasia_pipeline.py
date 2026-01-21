@@ -28,6 +28,7 @@ import os
 import platform
 import re
 import shutil
+from site import venv
 import subprocess
 import sys
 import time
@@ -36,14 +37,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, TextIO
 
-
+FANTASIA_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_VENV_DIR = FANTASIA_ROOT / "venv"
 DEFAULT_EMBED_MODELS = "prot_t5"
 SUPPORTED_EMBED_MODELS = {"prot_t5", "ankh3"}
 DEFAULT_CHUNK_SIZE = 500
 DEFAULT_LIMIT_PER_ENTRY = 1
 DEFAULT_DISTANCE_METRIC = "cosine"
 
-DEFAULT_LOOKUP_DIR = Path("data") / "lookup"
+DEFAULT_LOOKUP_DIR = FANTASIA_ROOT / "data" / "lookup"
 # Generate timestamped output directory
 _timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 DEFAULT_OUTPUT_DIR = Path(f"outputs_{_timestamp}")
@@ -144,13 +146,16 @@ class ChunkJob:
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    # Resolve the root directory of FANTASIA-Lite
+
+
     parser = argparse.ArgumentParser(
         description="Run the FANTASIA pipeline purely in Python."
     )
     parser.add_argument("fasta_path", help="Path to the FASTA file to annotate.")
     parser.add_argument(
         "--venv-dir",
-        default="venv",
+        default=str(DEFAULT_VENV_DIR),
         help="Directory for the Python virtual environment (default: %(default)s).",
     )
     parser.add_argument(
@@ -819,7 +824,7 @@ def run_chunk_pipeline(
         )
         embedding_cmd = [
             str(venv_python),
-            "generate_embeddings.py",
+            FANTASIA_ROOT / "src" / "generate_embeddings.py",
             "--chunks-file",
             str(chunk_spec_path),
             "--device",
@@ -855,7 +860,7 @@ def run_chunk_pipeline(
             chunk_config.write_text("\n".join(chunk_config_lines), encoding="utf-8")
 
             print(f"Running annotation lookup for {chunk_path} (models: {model_group})")
-            run_subprocess([str(venv_python), "fantasia_no_db.py", "--config", str(chunk_config)])
+            run_subprocess([str(venv_python), FANTASIA_ROOT / "src" / "fantasia_no_db.py", "--config", str(chunk_config)])
 
             append_csv(chunk_results, model_tmp_results, include_header=not model_header_written)
             model_header_written = True

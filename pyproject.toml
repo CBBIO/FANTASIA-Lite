@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=65", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fantasia-lite"
+version = "0.1.0"
+requires-python = ">=3.9"
+description = "FANTASIA-Lite pipeline"
+
+[project.scripts]
+fantasia_pipeline = "fantasia_pipeline:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["fantasia_pipeline"]
