@@ -105,7 +105,7 @@ fi
 # Run test
 echo ""
 echo "[4/4] Running validation test..."
-echo "Command: python3 fantasia_pipeline.py --serial-models --embed-models prot_t5 fasta_test/test.fa"
+echo "Command: python3 src/fantasia_pipeline.py --serial-models --embed-models prot_t5 fasta_test/test.fa"
 echo ""
 python3 fantasia_pipeline.py --serial-models --embed-models prot_t5 fasta_test/test.fa
 
