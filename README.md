@@ -112,7 +112,7 @@ The easiest way to get started is to use the automated setup script:
    - Skips extraction if files already exist
 
 4. **Runs validation test**
-   - Executes: `python3 fantasia_pipeline.py --serial-models --embed-models prot_t5 fasta_test/test.fa`
+   - Executes: `fantasia_pipeline.py --serial-models --embed-models prot_t5 fasta_test/test.fa`
    - Creates a Python virtual environment automatically (first run only)
    - Installs all required dependencies (PyTorch, transformers, etc.)
    - Processes 33 test sequences using the ProtT5 model
@@ -135,7 +135,7 @@ The easiest way to get started is to use the automated setup script:
 Once the test completes successfully, you can annotate your own protein sequences:
 
 ```bash
-python3 fantasia_pipeline.py --serial-models --embed-models prot_t5 your_proteins.fa
+fantasia_pipeline --serial-models --embed-models prot_t5 your_proteins.fa
 ```
 
 ## Quick Start
@@ -147,16 +147,16 @@ For processing protein sequences and obtaining GO annotations:
 
 ```bash
 # Basic usage - single model annotation
-python3 fantasia_pipeline.py your_proteins.fa
+fantasia_pipeline your_proteins.fa
 
 # Recommended usage with specific model
-python3 fantasia_pipeline.py --serial-models --embed-models prot_t5 your_proteins.fa
+fantasia_pipeline --serial-models --embed-models prot_t5 your_proteins.fa
 
 # Multiple models (slower but more comprehensive)
-python3 fantasia_pipeline.py --serial-models --embed-models "prot_t5 ankh3" your_proteins.fa
+fantasia_pipeline --serial-models --embed-models "prot_t5 ankh3" your_proteins.fa
 
 # Advanced configuration
-python3 fantasia_pipeline.py \
+fantasia_pipeline \
     --embed-models prot_t5 \
     --limit-per-entry 5 \
     --results-csv my_results.csv \
@@ -173,21 +173,21 @@ For benchmarking, performance testing, and systematic analysis:
 
 ```bash
 # Basic timing analysis - processes all test files with both models [prot_t5, ankh3]
-python3 pipeline_timing_analyzer.py
+python3 FANTASIA-Lite/src/pipeline_timing_analyzer.py
 
 # Quick test with specific file and single model
-python3 pipeline_timing_analyzer.py \
+python3 FANTASIA-Lite/src/pipeline_timing_analyzer.py \
     --files fasta_test/test.fa \
     --model prot_t5 \
     --report-csv quick_benchmark.csv
 
 # Compare models on specific files
-python3 pipeline_timing_analyzer.py \
+python3 FANTASIA-Lite/src/pipeline_timing_analyzer.py \
     --files fasta_test/test.fa fasta_test/UP000001940_6239.fasta \
     --report-csv model_comparison.csv
 
 # Custom analysis with all options
-python3 pipeline_timing_analyzer.py \
+python3 FANTASIA-Lite/src/pipeline_timing_analyzer.py \
     --fasta-dir fasta_test \
     --model ankh3 \
     --files fasta_test/test.fa \
@@ -340,19 +340,19 @@ The pipeline automatically manages Python virtual environments:
 # Virtual environment is created automatically in venv/
 # To clean up and force rebuild:
 rm -rf venv/
-python3 fantasia_pipeline.py your_file.fa  # Will recreate venv automatically
+fantasia_pipeline your_file.fa  # Will recreate venv automatically
 ```
 
 ### Batch Processing
 For processing multiple files systematically:
 ```bash
 # Process multiple specific files
-python3 pipeline_timing_analyzer.py \
+python3 FANTASIA-Lite/src/pipeline_timing_analyzer.py \
     --files file1.fa file2.fa file3.fa \
     --model prot_t5
 
 # Process all files in a directory
-python3 pipeline_timing_analyzer.py \
+python3 FANTASIA-Lite/src/pipeline_timing_analyzer.py \
     --fasta-dir my_proteomes/ \
     --report-csv batch_results.csv
 ```
@@ -361,7 +361,7 @@ python3 pipeline_timing_analyzer.py \
 For large files or limited memory systems:
 ```bash
 # Use serial processing and single model
-python3 fantasia_pipeline.py \
+fantasia_pipeline \
     --serial-models \
     --embed-models prot_t5 \
     --chunk-size 200 \
