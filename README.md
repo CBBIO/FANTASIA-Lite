@@ -1,7 +1,9 @@
 
 # FANTASIA Lite V1
 
-**FANTASIA Lite V1** is a streamlined, standalone version of the full [FANTASIA pipeline](https://github.com/CBBIO/FANTASIA), designed for fast and efficient Gene Ontology (GO) annotation of protein sequences from local FASTA files.
+**FANTASIA Lite V1** is a streamlined, standalone version of the full [FANTASIA pipeline](https://github.com/CBBIO/FANTASIA), designed for fast and efficient Gene Ontology (GO) annotation of protein sequences from local FASTA files using embedding comparisons.
+
+FANTASIA Lite generates deep learning embeddings and perform nearest-neighbor annotation transfer, while intentionally removing the service stack used by the full project. The bundled lookup table covers multiple reference embedding spaces, while the built-in Lite embedder focuses on the models currently exposed directly through the local CLI.
 
 The simplest way to run it is:
 
@@ -9,16 +11,18 @@ The simplest way to run it is:
 ./scripts/minimal_pipeline.sh your_proteins.fa
 ```
 
-Before any annotation run can work, the required lookup bundle must be downloaded from Zenodo and placed in `data/lookup/`.
-
-FANTASIA Lite leverages state-of-the-art protein language models to generate deep learning embeddings and perform nearest-neighbor annotation transfer, while intentionally removing the service stack used by the full project. The bundled lookup table covers multiple reference embedding spaces, while the built-in Lite embedder focuses on the models currently exposed directly through the local CLI.
+Before any annotation run can work, the required lookup bundle must be downloaded from [Zenodo](https://zenodo.org/records/19742926) and placed in `data/lookup/`.
 
 Unlike the full FANTASIA pipeline, **FANTASIA Lite does not require PostgreSQL, RabbitMQ, or a database-backed orchestration layer**. It runs locally from flat files:
 - `lookup_table.npz` for reference embeddings
 - `annotations.json` for GO annotations
 - `accessions.json` for accession mapping
 
+## Warning
+
 The tradeoff is that Lite is simpler to deploy but can be slower if embedding and lookup are not tuned well. This repository now includes GPU-aware embedding and lookup controls intended to recover as much performance as possible without reintroducing external services.
+
+## Scope and Purpose
 
 The main purpose of Lite V1 is to provide a fast local annotator that can be dropped into other pipelines with minimal setup. The default fast path is intentionally simple: ProtT5 embeddings, cosine lookup, and `k=1` transfer. More advanced configuration is still available when you need multi-model runs, layered embedding export, larger `k`, or other custom settings.
 
