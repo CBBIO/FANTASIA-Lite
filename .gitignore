@@ -82,3 +82,8 @@ Thumbs.db
 # Timing and benchmark reports
 pipeline_timing_analysis.csv
 *_benchmark.csv
+
+# Local ad hoc validation files
+cpu_test5.fa
+outputs_layers.npz
+outputs_layers.h5

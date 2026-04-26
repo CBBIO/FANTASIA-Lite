@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+title: "FANTASIA Lite V1"
+message: "If you use this repository, please cite the software repository and the associated lookup bundle."
+type: software
+version: "V1"
+doi: "10.5281/zenodo.19742926"
+repository-code: "https://github.com/CBBIO/FANTASIA-Lite"
+keywords:
+  - protein function annotation
+  - Gene Ontology
+  - protein language models
+  - embeddings
+  - nearest-neighbor annotation transfer
+  - FANTASIA
+  - FANTASIA Lite
+  - ProtT5
+  - Ankh3
+  - ESM3c
+authors:
+  - family-names: "Rojas"
+    given-names: "Ana"
+  - family-names: "Dominguez"
+    given-names: "Alex"

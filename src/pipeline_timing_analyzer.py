@@ -1,90 +1,12 @@
 #!/usr/bin/env python3
-"""
-pipeline_timing_analyzer.py
-===========================
-
-FANTASIA Pipeline Timing Analyzer
-----------------------------------
-
-A comprehensive timing analysis tool for the FANTASIA protein annotation pipeline.
-This script processes multiple FASTA files sequentially and generates detailed 
-performance metrics for comparing pipeline execution across different hardware 
-configurations, GPU models, and software versions.
-
-Purpose:
---------
-- Analyze pipeline timing and performance across multiple FASTA files
-- Generate comprehensive reports for GPU vs CPU performance comparison
-- Collect system metrics for hardware performance evaluation
-- Enable reproducible benchmarking across different environments
-- Support performance regression testing between pipeline versions
-
-Features:
----------
-- Sequential processing of all FASTA files (.fa, .faa, .fasta) in a directory
-- Automatic GPU detection and memory monitoring via nvidia-smi
-- Timestamped pipeline output directory tracking
-- Comprehensive CSV reporting with timing and system metrics
-- Sequence processing rate calculation (sequences per second)
-- Success/failure tracking with error reporting
-- Compatible with prot_t5, esm2, and ankh3 embedding models
-
-Output Metrics:
----------------
-- GPU model and memory specifications
-- Runtime in seconds for each FASTA file
-- Processing rate (sequences/second)
-- Successfully processed vs failed sequences
-- GPU memory usage before processing
-- Pipeline output directory references
-- Detailed error messages for debugging
-
-Usage Examples:
----------------
-# Basic analysis with default settings
-python3 pipeline_timing_analyzer.py
-
-# Analyze specific directory with custom model
-python3 pipeline_timing_analyzer.py --fasta-dir my_sequences --model esm2
-
-# Custom output report location
-python3 pipeline_timing_analyzer.py --report-csv gpu_comparison_results.csv
-
-# Full customization
-python3 pipeline_timing_analyzer.py \\
-    --fasta-dir /path/to/sequences \\
-    --pipeline-script /path/to/fantasia_pipeline.py \\
-    --model prot_t5 \\
-    --report-csv timing_analysis_results.csv
-
-Requirements:
--------------
-- FANTASIA pipeline (fantasia_pipeline.py) in the same directory
-- FASTA files to process in the specified directory
-- NVIDIA GPU with nvidia-smi for GPU monitoring (optional)
-- Python packages: pathlib, csv, subprocess, datetime
-
-Output Files:
--------------
-- CSV report: pipeline_timing_analysis.csv (default)
-- Individual pipeline outputs: outputs_YYYYMMDD_HHMMSS/ directories
-- Each pipeline output contains: results.csv, failed_sequences.csv, etc.
-
-Note:
------
-This script does not create intermediate batch directories. Each pipeline run
-creates its own timestamped directory (outputs_YYYYMMDD_HHMMSS) which remains
-in place for individual result inspection.
-
-Author: Generated for FANTASIA pipeline timing analysis
-Version: 1.0
-Last Updated: November 2025
-"""
+"""Benchmark the Lite pipeline across one or more FASTA files."""
 
 import argparse
 import csv
+import json
 import shutil
 import subprocess
+import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -234,6 +156,24 @@ def count_unique_sequences_in_results(csv_path: Path) -> int:
         return 0
 
 
+def read_run_metadata(metadata_path: Path) -> Dict[str, object]:
+    """Read pipeline run metadata written by fantasia_pipeline.py."""
+    if not metadata_path.exists():
+        return {}
+
+    try:
+        import yaml
+
+        with metadata_path.open("r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle) or {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        try:
+            return json.loads(metadata_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+
 def find_fasta_files(directory: Path) -> List[Path]:
     """Find all FASTA files in directory with common extensions."""
     fasta_extensions = {'.fa', '.faa', '.fasta'}
@@ -271,7 +211,7 @@ def run_fantasia_pipeline(
     fasta_path: Path,
     pipeline_script: Path,
     model_name: str
-) -> Tuple[bool, float, str, Optional[Path]]:
+) -> Tuple[bool, float, str, Optional[Path], Dict[str, object]]:
     """
     Run FANTASIA pipeline on a single FASTA file.
     
@@ -287,8 +227,9 @@ def run_fantasia_pipeline(
     pipeline_start_time = datetime.now()
     
     # Prepare command - let pipeline use its default timestamped outputs
+    python_bin = shutil.which("python3") or sys.executable or "python3"
     cmd = [
-        'python3', 
+        python_bin,
         str(pipeline_script),
         '--serial-models',
         '--embed-models', model_name,
@@ -344,7 +285,8 @@ def run_fantasia_pipeline(
             
         if pipeline_output_dir and pipeline_output_dir.exists():
             print(f"  Pipeline output saved to: {pipeline_output_dir.name}")
-            return True, runtime, "", pipeline_output_dir
+            metadata = read_run_metadata(pipeline_output_dir / "run_metadata.yaml")
+            return True, runtime, "", pipeline_output_dir, metadata
         else:
             # Try to find any recent outputs directory as fallback
             recent_dirs = []
@@ -362,14 +304,15 @@ def run_fantasia_pipeline(
                 recent_dirs.sort(key=lambda x: x[1], reverse=True)
                 pipeline_output_dir = recent_dirs[0][0]
                 print(f"  Using most recent output directory: {pipeline_output_dir.name}")
-                return True, runtime, "", pipeline_output_dir
+                metadata = read_run_metadata(pipeline_output_dir / "run_metadata.yaml")
+                return True, runtime, "", pipeline_output_dir, metadata
             else:
-                return True, runtime, "Warning: Could not find pipeline output directory", None
+                return True, runtime, "Warning: Could not find pipeline output directory", None, {}
         
     except subprocess.CalledProcessError as e:
         runtime = time.time() - start_time
         error_msg = f"Exit code {e.returncode}: {e.stderr[:200] if e.stderr else e.stdout[:200]}"
-        return False, runtime, error_msg, None
+        return False, runtime, error_msg, None, {}
 
 
 def process_all_fasta_files(
@@ -414,6 +357,10 @@ def process_all_fasta_files(
         'gpu_memory_total',
         'model_name',
         'runtime_seconds',
+        'embedding_time_seconds',
+        'lookup_time_seconds',
+        'postprocess_time_seconds',
+        'measured_stage_time_seconds',
         'input_sequences',
         'processing_rate_seq_per_sec',
         'sequences_processed',
@@ -460,9 +407,14 @@ def process_all_fasta_files(
                 current_gpu_info = get_gpu_info()
                 
                 # Run pipeline - let it create its own timestamped directory
-                success, runtime, error_msg, pipeline_output_path = run_fantasia_pipeline(
+                success, runtime, error_msg, pipeline_output_path, run_metadata = run_fantasia_pipeline(
                     fasta_path, pipeline_script, model_name
                 )
+                stage_timing = run_metadata.get('stage_timing_seconds', {}) if isinstance(run_metadata, dict) else {}
+                embedding_time = float(stage_timing.get('embedding', 0.0) or 0.0)
+                lookup_time = float(stage_timing.get('lookup', 0.0) or 0.0)
+                postprocess_time = float(stage_timing.get('postprocess', 0.0) or 0.0)
+                measured_stage_total = float(stage_timing.get('measured_total', 0.0) or 0.0)
                 
                 # Count results from pipeline output directory
                 if pipeline_output_path and success:
@@ -485,6 +437,13 @@ def process_all_fasta_files(
                 
                 print(f"    Success: {success}")
                 print(f"    Runtime: {runtime:.2f}s")
+                if measured_stage_total > 0:
+                    print(
+                        "    Stage timing: "
+                        f"embedding={embedding_time:.2f}s, "
+                        f"lookup={lookup_time:.2f}s, "
+                        f"postprocess={postprocess_time:.2f}s"
+                    )
                 print(f"    Processed: {sequences_processed} sequences")
                 print(f"    Failed: {sequences_failed} sequences")
                 print(f"    Total annotations: {total_annotations}")
@@ -507,6 +466,10 @@ def process_all_fasta_files(
                     'model_name': model_name,
                     'success': success,
                     'runtime_seconds': f"{runtime:.2f}",
+                    'embedding_time_seconds': f"{embedding_time:.2f}",
+                    'lookup_time_seconds': f"{lookup_time:.2f}",
+                    'postprocess_time_seconds': f"{postprocess_time:.2f}",
+                    'measured_stage_time_seconds': f"{measured_stage_total:.2f}",
                     'sequences_processed': sequences_processed,
                     'sequences_failed': sequences_failed,
                     'total_results': sequences_processed + sequences_failed,
@@ -535,15 +498,15 @@ def main():
     )
     parser.add_argument(
         "--pipeline-script",
-        default="fantasia_pipeline.py",
-        help="Path to fantasia_pipeline.py script (default: fantasia_pipeline.py in current directory)"
+        default="src/fantasia_pipeline.py",
+        help="Path to fantasia_pipeline.py script (default: src/fantasia_pipeline.py)"
     )
     parser.add_argument(
         "--model",
-        default=['prot_t5', 'ankh3'],
+        default=['prot_t5'],
         choices=['prot_t5', 'ankh3'],
         nargs='*',
-        help="Embedding model(s) to use (default: both prot_t5 and ankh3)"
+        help="Embedding model(s) to use (default: prot_t5)"
     )
     parser.add_argument(
         "--files",
