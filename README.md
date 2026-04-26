@@ -263,11 +263,7 @@ git clone https://github.com/CBBIO/FANTASIA-Lite.git
 cd FANTASIA-Lite
 ```
 
-To use THIS LATEST update of Lite V1 branch specifically:
-
-```bash
-git checkout FANTASIA-Lite-V1
-```
+FANTASIA Lite V1 is the current default branch of this repository. The previous Lite V0 state remains available in the `fantasia-lite-V0` branch.
 
 ### Step 2: Add the Lookup Bundle
 Download the Lite lookup bundle from Zenodo and place these files in `data/lookup/`:
