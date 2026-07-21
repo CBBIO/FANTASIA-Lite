@@ -11,7 +11,14 @@ The simplest way to run it is:
 ./scripts/minimal_pipeline.sh your_proteins.fa
 ```
 
-Before any annotation run can work, the required lookup bundle must be downloaded from [Zenodo](https://zenodo.org/records/19742926) and placed in `data/lookup/`.
+Before any annotation run can work, create `data/lookup/`, then download the
+required lookup data from [Zenodo](https://doi.org/10.5281/zenodo.19742925). These
+directories are intentionally not tracked by Git and are not created by a
+fresh clone:
+
+```bash
+mkdir -p data/lookup
+```
 
 Unlike the full FANTASIA pipeline, **FANTASIA Lite does not require PostgreSQL, RabbitMQ, or a database-backed orchestration layer**. It runs locally from flat files:
 - `lookup_table.npz` for reference embeddings
@@ -53,7 +60,7 @@ Compared with the earlier Lite V0 branch, Lite V1 includes several practical imp
 
 ## Installation Requirements
 - Python 3.10 or newer (the pipeline automatically creates and manages virtual environments)
-- Required lookup bundle (`lookup_table.npz`, `annotations.json`, `accessions.json`) from [Zenodo: 19742926](https://zenodo.org/records/19742926) placed in `data/lookup/` before running the pipeline
+- Required lookup bundle (`lookup_table.npz`, `annotations.json`, `accessions.json`) from [Zenodo](https://doi.org/10.5281/zenodo.19742925) placed in `data/lookup/` before running the pipeline
 - Internet connection for automatic dependency installation
 - Sufficient disk space for outputs and embeddings (approximately 1-2 GB per run)
 - Git (for cloning the repository)
@@ -64,9 +71,10 @@ Compared with the earlier Lite V0 branch, Lite V1 includes several practical imp
 
 The FANTASIA Lite V1 lookup table is built from the **UniProt November 2025 release** and includes only proteins with experimental evidence, ensuring high-quality functional annotations. All data was generated using PIS v3.1.0, the internal system used to extract and preprocess UniProt, PDB, and GOA data.
 
-**Lookup bundle Zenodo DOI:** [10.5281/zenodo.19742926](https://doi.org/10.5281/zenodo.19742926)
+**Lookup bundle Zenodo concept DOI:** [10.5281/zenodo.19742925](https://doi.org/10.5281/zenodo.19742925)
 
-Use this DOI to cite the lookup table or to access the official download page.
+Use this concept DOI to cite the lookup table or access its latest published
+version. Individual releases also have version-specific DOIs.
 
 ### Core Statistics
 - **Reference entries in `accessions.json`**: 124,397
@@ -83,7 +91,9 @@ Use this DOI to cite the lookup table or to access the official download page.
 These are the measured per-model embedding counts in the current lookup bundle. `annotations.json` and `accessions.json` both contain `124,397` entries, while the individual model spaces in `lookup_table.npz` can differ slightly in coverage.
 
 ### Package Contents
-The lookup bundle (`fantasia_lite_data_folder.tgz`) contains three essential files:
+The Zenodo deposition provides the three essential lookup files both as the
+single convenience archive `fantasia_lite_data_folder.tgz` and as separate
+downloads. The archive contains:
 
 1. **`lookup_table.npz`**
    - Precomputed protein embeddings for ESM-2, ProstT5, ProtT5, Ankh3-Large, and ESM3c
@@ -266,7 +276,22 @@ cd FANTASIA-Lite
 FANTASIA Lite V1 is the current default branch of this repository. The previous Lite V0 state remains available in the `fantasia-lite-V0` branch.
 
 ### Step 2: Add the Lookup Bundle
-Download the Lite lookup bundle from Zenodo and place these files in `data/lookup/`:
+The `data/lookup/` directories are not included in Git clones. Create them
+before downloading or extracting the lookup data:
+
+```bash
+mkdir -p data/lookup
+```
+
+Download `fantasia_lite_data_folder.tgz` from Zenodo and extract it from the
+repository root:
+
+```bash
+tar -xzf fantasia_lite_data_folder.tgz
+```
+
+Alternatively, download the following three files separately and place each
+one directly in `data/lookup/`:
 
 - `lookup_table.npz`
 - `annotations.json`
