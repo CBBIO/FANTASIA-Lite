@@ -12,7 +12,9 @@ production workflows, use [FANTASIA Full](https://github.com/CBBIO/FANTASIA).
 ## Start here
 
 The shortest complete Lite run uses ProtT5, cosine distance, `k=1`, full-length
-query embeddings, and automatic CPU/GPU selection.
+query embeddings, and GPU acceleration by default when CUDA is available.
+An NVIDIA GPU is strongly recommended; CPU mode is a supported but substantially
+slower fallback.
 
 ### 1. Clone the repository
 
@@ -103,7 +105,7 @@ decompressed while reading; you do not need to unpack it first.
 - Git
 - internet access on the first run for Python packages and model weights
 - the three-file Lite lookup bundle
-- optional NVIDIA GPU for substantially faster embedding and lookup
+- NVIDIA GPU strongly recommended for embedding and lookup; CPU is a slower fallback
 
 The extracted lookup bundle is approximately 3.1 GB; the compressed archive is
 approximately 1.8 GB. Allow at least 5 GB while retaining both. Model caches,
@@ -115,7 +117,7 @@ There is no universal RAM/VRAM minimum because sequence lengths and batch sizes
 matter. Start with at least 16 GB system RAM. The supplied tuned GPU profile was
 tested on a 24 GB GPU; reduce `--embed-batch-size`,
 `--model-batch-sizes`, and `--max-batch-residues` on smaller GPUs. CPU execution
-is supported but substantially slower.
+is supported only as a substantially slower fallback.
 
 ## What the lookup bundle contains
 
@@ -166,7 +168,7 @@ the following defaults:
 | Setting | Python default | Meaning |
 |---|---|---|
 | embedding model | `prot_t5` | Built-in query embedder |
-| device | automatic | CUDA when `nvidia-smi` is available; otherwise CPU |
+| device | automatic, GPU-first | CUDA when `nvidia-smi` is available; otherwise CPU fallback |
 | lookup device | follows embedding device | Override with `--use-gpu-lookup` or `--no-gpu-lookup` |
 | distance | `cosine` | Also accepts `euclidean` |
 | neighbors (`k`) | `1` | `--limit-per-entry` |
@@ -206,7 +208,7 @@ python3 src/fantasia_pipeline.py \
   data/my_proteome.faa.gz
 ```
 
-### CPU run
+### CPU fallback
 
 ```bash
 python3 src/fantasia_pipeline.py \
