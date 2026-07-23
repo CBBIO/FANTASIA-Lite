@@ -103,12 +103,14 @@ MODEL_REGISTRY: Dict[str, Dict[str, object]] = {
     # ProtT5 model.  The lookup table refers to this model as ``Prot-T5``.
     "prot_t5": {
         "hf_id": "Rostlab/prot_t5_xl_uniref50",
+        "revision": "973be27c52ee6474de9c945952a8008aeb2a1a73",
         "key": "Prot-T5",
         "tokenizer_use_fast": False,
     },
     # Ankh3-Large model.  The lookup table key is ``Ankh3-Large``.
     "ankh3": {
         "hf_id": "ElnaggarLab/ankh3-large",
+        "revision": "2be091622e8a393f0ef21735070084123c874b6e",
         "key": "Ankh3-Large",
         "tokenizer_use_fast": False,
     },
@@ -493,6 +495,7 @@ def load_model_components(
     """Load tokenizer and model for ``model_name`` and move to ``device``."""
     model_info = MODEL_REGISTRY[model_name]
     hf_model_id = model_info["hf_id"]
+    revision = model_info["revision"]
     print(f"Loading model {model_name} ({hf_model_id})…")
     tokenizer_kwargs = dict(model_info.get("tokenizer_kwargs", {}))
     model_kwargs = dict(model_info.get("model_kwargs", {}))
@@ -500,9 +503,12 @@ def load_model_components(
     tokenizer = AutoTokenizer.from_pretrained(
         hf_model_id,
         use_fast=tokenizer_use_fast,
+        revision=revision,
         **tokenizer_kwargs,
     )
-    model = AutoModel.from_pretrained(hf_model_id, **model_kwargs)
+    model = AutoModel.from_pretrained(
+        hf_model_id, revision=revision, **model_kwargs
+    )
     model.to(device)
     model.eval()
     embedding_dim = infer_embedding_dim(model)
