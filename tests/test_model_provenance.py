@@ -55,6 +55,43 @@ class LiteModelProvenanceTests(unittest.TestCase):
         self.assertEqual(_Model.calls[0][0], expected["hf_id"])
         self.assertEqual(_Model.calls[0][1]["revision"], expected["revision"])
 
+    def test_provenance_does_not_modify_configured_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fasta = root / "input.fa"
+            fasta.write_text(">p1\nACDE\n")
+            custom_results = root / "custom" / "called-results.csv"
+            custom_embeddings = root / "custom" / "called-embeddings.npz"
+            custom_provenance = root / "metadata" / "called-provenance.yaml"
+            args = fantasia_pipeline.parse_args(
+                [
+                    str(fasta),
+                    "--results-csv", str(custom_results),
+                    "--embeddings-npz", str(custom_embeddings),
+                    "--model-provenance-yaml", str(custom_provenance),
+                ]
+            )
+            config = fantasia_pipeline.PipelineConfig.from_args(args)
+            before = (
+                config.fasta_path,
+                config.results_csv,
+                config.embeddings_npz,
+                config.model_provenance_yaml,
+            )
+            fantasia_pipeline.build_model_provenance(config)
+            after = (
+                config.fasta_path,
+                config.results_csv,
+                config.embeddings_npz,
+                config.model_provenance_yaml,
+            )
+            self.assertEqual(before, after)
+            self.assertEqual(config.results_csv, custom_results.resolve())
+            self.assertEqual(config.embeddings_npz, custom_embeddings.resolve())
+            self.assertEqual(config.model_provenance_yaml, custom_provenance.resolve())
+            for path in after:
+                self.assertNotIn("973be27c", str(path))
+
     def test_run_writes_model_provenance_before_other_stages(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
