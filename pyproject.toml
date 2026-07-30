@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fantasia-lite"
-version = "0.1.0"
-requires-python = ">=3.9"
+version = "1.1.0"
+requires-python = ">=3.12"
 description = "FANTASIA-Lite pipeline"
 
 [project.scripts]

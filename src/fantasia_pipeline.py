@@ -41,7 +41,26 @@ from typing import Dict, Iterable, List, Optional, Sequence, TextIO
 FANTASIA_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_VENV_DIR = FANTASIA_ROOT / "venv"
 DEFAULT_EMBED_MODELS = "prot_t5"
-SUPPORTED_EMBED_MODELS = {"prot_t5", "ankh3"}
+SUPPORTED_EMBED_MODELS = {"esm2", "prost_t5", "prot_t5", "ankh3", "esmc"}
+MODEL_ALIASES = {
+    "esm": "esm2",
+    "esm2": "esm2",
+    "esm-2": "esm2",
+    "prost-t5": "prost_t5",
+    "prost_t5": "prost_t5",
+    "prostt5": "prost_t5",
+    "prot-t5": "prot_t5",
+    "prot_t5": "prot_t5",
+    "prott5": "prot_t5",
+    "ankh3": "ankh3",
+    "ankh3-large": "ankh3",
+    "ankh3_large": "ankh3",
+    "esmc": "esmc",
+    "esm-c": "esmc",
+    "esm_c": "esmc",
+    "esm3c": "esmc",
+}
+ESMC_PYTHON_REQUIREMENT = ">=3.12,<3.13"
 DEFAULT_CHUNK_SIZE = 500
 DEFAULT_LIMIT_PER_ENTRY = 1
 DEFAULT_DISTANCE_METRIC = "cosine"
@@ -62,6 +81,38 @@ _ACTIVE_LOG_HANDLE: Optional[TextIO] = None
 
 class PipelineError(RuntimeError):
     """Raised when a pipeline stage fails in a recoverable way."""
+
+
+def parse_embed_model_names(models: str) -> List[str]:
+    requested: List[str] = []
+    unknown: List[str] = []
+    for raw_model in models.strip().split():
+        normalized = MODEL_ALIASES.get(raw_model.strip().lower())
+        if normalized is None:
+            unknown.append(raw_model)
+            continue
+        if normalized not in requested:
+            requested.append(normalized)
+    if unknown:
+        supported = ", ".join(sorted(SUPPORTED_EMBED_MODELS))
+        raise PipelineError(
+            f"Unsupported embedding model(s): {', '.join(unknown)}. "
+            f"Supported models: {supported}."
+        )
+    return requested
+
+
+def validate_python_for_models(models: Sequence[str]) -> None:
+    if "esmc" not in models:
+        return
+    if (3, 12) <= sys.version_info[:2] < (3, 13):
+        return
+    raise PipelineError(
+        "ESM-C uses esm==3.2.3, which currently supports Python "
+        f"{ESMC_PYTHON_REQUIREMENT}. Current interpreter is Python "
+        f"{platform.python_version()} at {sys.executable}. Run the pipeline with "
+        "Python 3.12 and recreate the virtual environment."
+    )
 
 
 @dataclasses.dataclass
@@ -326,8 +377,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--embed-models",
         default=None,
         help=(
-            "Space-separated list of embedding models (choices: prot_t5, ankh3; "
-            "default from env or 'prot_t5')."
+            "Space-separated list of embedding models "
+            "(choices: esm2, prost_t5, prot_t5, ankh3, esmc; default from env or 'prot_t5'). "
+            "Full FANTASIA aliases such as ESM, Prost-T5, Prot-T5, Ankh3-Large, "
+            "and ESM3c are accepted."
         ),
     )
     parser.add_argument(
@@ -408,13 +461,13 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         default=(),
         help=(
             "Optional per-model forward batch overrides in the form "
-            "'prot_t5=8 ankh3=4'."
+            "'esm2=1 prost_t5=1 prot_t5=4 ankh3=4 esmc=1'."
         ),
     )
     parser.add_argument(
         "--torch-index",
         default=None,
-        help="Custom extra-index for installing CUDA-enabled PyTorch wheels.",
+        help="Custom package index for installing CUDA-enabled PyTorch wheels.",
     )
     parser.add_argument(
         "--failure-report",
@@ -624,16 +677,30 @@ def write_run_metadata(path: Path, metadata: Dict[str, object]) -> None:
         path.write_text(json.dumps(metadata, indent=2, default=str), encoding="utf-8")
 
 
-def run_lookup_in_process(conf: Dict[str, object], *, use_gpu_lookup: bool) -> None:
-    if use_gpu_lookup:
-        from fantasia_no_db_gpu import EmbeddingLookUpLocalGPU
+def write_lookup_config(path: Path, conf: Dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import yaml
 
-        lookup = EmbeddingLookUpLocalGPU(conf)
-    else:
-        from fantasia_no_db import EmbeddingLookUpLocal
+        path.write_text(yaml.safe_dump(conf, sort_keys=False), encoding="utf-8")
+    except Exception:
+        path.write_text(json.dumps(conf, indent=2, default=str), encoding="utf-8")
 
-        lookup = EmbeddingLookUpLocal(conf)
-    lookup.start()
+
+def run_lookup_subprocess(
+    conf: Dict[str, object],
+    *,
+    use_gpu_lookup: bool,
+    venv_python: Path,
+    config_path: Path,
+    device: str,
+) -> None:
+    write_lookup_config(config_path, conf)
+    script_name = "fantasia_no_db_gpu.py" if use_gpu_lookup else "fantasia_no_db.py"
+    run_subprocess(
+        [str(venv_python), FANTASIA_ROOT / "src" / script_name, "--config", str(config_path)],
+        env=torch_runtime_env(device),
+    )
 
 
 def detect_device(config_device: Optional[str]) -> str:
@@ -648,22 +715,107 @@ def detect_device(config_device: Optional[str]) -> str:
     return "cpu"
 
 
+def validate_torch_device(venv_python: Path, device: str, *, explicit: bool) -> str:
+    """Return a usable PyTorch device after a real allocation probe."""
+    if not device.lower().startswith("cuda"):
+        return device
+
+    probe = (
+        "import torch; "
+        "assert torch.cuda.is_available(), 'torch.cuda.is_available() is false'; "
+        "x = torch.empty((1,), device='cuda'); "
+        "torch.cuda.synchronize(); "
+        "print(torch.cuda.get_device_name(0))"
+    )
+    result = subprocess.run(
+        [str(venv_python), "-c", probe],
+        env={
+            **os.environ,
+            "PYTORCH_NO_CUDA_MEMORY_CACHING": os.environ.get(
+                "PYTORCH_NO_CUDA_MEMORY_CACHING", "1"
+            ),
+        },
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode == 0:
+        print(f"Validated CUDA device with PyTorch: {result.stdout.strip()}")
+        return device
+
+    detail = (result.stderr or result.stdout).strip()
+    message = (
+        "PyTorch could not allocate on CUDA even though CUDA was requested/detected. "
+        f"Probe error: {detail}"
+    )
+    if explicit:
+        raise PipelineError(
+            message
+            + "\nUse --device cpu to continue without CUDA, or fix the CUDA/NVML driver "
+            "environment before rerunning with --device cuda."
+        )
+
+    print(message)
+    print("Falling back to CPU for embedding and lookup.")
+    return "cpu"
+
+
 def install_packages(config: PipelineConfig) -> str:
     device = detect_device(config.device)
+    requested_models = parse_embed_model_names(
+        str(getattr(config, "embed_models", DEFAULT_EMBED_MODELS))
+    )
+    install_esmc = "esmc" in requested_models
+    validate_python_for_models(requested_models)
     pip_bin = venv_pip_executable(config.venv_dir)
 
     print("Upgrading pip…")
     run_subprocess([str(pip_bin), "install", "--upgrade", "pip"])
 
+    torch_packages = ["torch"]
+    if device.lower() == "cuda":
+        if config.torch_index:
+            print(f"Installing PyTorch with CUDA support from {config.torch_index}…")
+            run_subprocess(
+                [str(pip_bin), "install", "--index-url", config.torch_index, *torch_packages]
+            )
+        else:
+            print("Installing PyTorch with CUDA support from the default package index…")
+            run_subprocess([str(pip_bin), "install", *torch_packages])
+    else:
+        print("Installing CPU-only PyTorch packages…")
+        run_subprocess([str(pip_bin), "install", *torch_packages])
+
     base_deps = [
         "numpy",
         "requests",
-        "transformers",
+        "transformers<4.48.2",
         "biopython",
         "pandas",
         "scipy",
         "sentencepiece",
         "protobuf",
+        "huggingface-hub",
+        "httpx",
+    ]
+    esmc_runtime_deps = [
+        "ipython",
+        "einops",
+        "biotite>=1.0.0",
+        "msgpack-numpy",
+        "scikit-learn",
+        "brotli",
+        "attrs",
+        "cloudpathlib",
+        "tenacity",
+        "zstd",
+        "ipywidgets",
+        "py3dmol",
+        "pydssp",
+        "boto3",
+        "pygtrie",
+        "dna_features_viewer",
     ]
 
     system_name = platform.system()
@@ -677,26 +829,44 @@ def install_packages(config: PipelineConfig) -> str:
 
     print("Installing base dependencies…")
     run_subprocess([str(pip_bin), "install", *base_deps])
-
-    torch_packages = ["torch", "torchvision", "torchaudio"]
-    if device.lower() == "cuda":
-        torch_index = config.torch_index or "https://download.pytorch.org/whl/cu124"
-        print(f"Installing PyTorch with CUDA support from {torch_index}…")
-        run_subprocess(
-            [str(pip_bin), "install", "--extra-index-url", torch_index, *torch_packages]
-        )
+    if install_esmc:
+        print("Installing ESM-C runtime dependencies without torchvision/torchtext…")
+        run_subprocess([str(pip_bin), "install", *esmc_runtime_deps])
+        # ESM 3.2.3 declares torchvision/torchtext, but the local ESM-C embedding
+        # path does not use them. Installing the package without deps avoids
+        # fragile torch/torchvision wheel mismatches.
+        run_subprocess([str(pip_bin), "install", "--no-deps", "esm==3.2.3"])
     else:
-        print("Installing CPU-only PyTorch packages…")
-        run_subprocess([str(pip_bin), "install", *torch_packages])
+        print("ESM-C model not requested; skipping ESM-C runtime dependencies.")
 
-    return device
+    return validate_torch_device(
+        venv_python_executable(config.venv_dir),
+        device,
+        explicit=config.device is not None,
+    )
 
 
 def should_use_gpu_lookup(config: PipelineConfig, device: str) -> bool:
     """Decide whether the lookup stage should run via the GPU script."""
     if config.use_gpu_lookup is not None:
+        if config.use_gpu_lookup and not device.lower().startswith("cuda"):
+            raise PipelineError(
+                "--use-gpu-lookup was requested, but the resolved PyTorch device is "
+                f"{device!r}. Use --no-gpu-lookup or fix CUDA before forcing GPU lookup."
+            )
         return config.use_gpu_lookup
     return device.lower().startswith("cuda")
+
+
+def torch_runtime_env(device: str) -> dict[str, str]:
+    """Environment overrides for PyTorch subprocesses."""
+    if not device.lower().startswith("cuda"):
+        return {}
+    return {
+        "PYTORCH_NO_CUDA_MEMORY_CACHING": os.environ.get(
+            "PYTORCH_NO_CUDA_MEMORY_CACHING", "1"
+        )
+    }
 
 
 def have_lookup_artifacts(config: PipelineConfig) -> bool:
@@ -902,21 +1072,42 @@ def merge_all_embeddings(output_path: Path, input_paths: Sequence[Path]) -> None
         raise PipelineError("No embedding archives provided for consolidation.")
     import numpy as np
 
-    base = np.load(input_paths[0], allow_pickle=True)
-    accessions = base["accessions"]
-    sequences = base["sequences"]
-    merged_arrays = {k: base[k] for k in base.files if k not in {"embeddings", "accessions", "sequences"}}
-    merged_embeddings = base["embeddings"].item()
-    merged_layer_embeddings = (
-        base["layer_embeddings"].item() if "layer_embeddings" in base.files else {}
-    )
+    merged_arrays: dict[str, object] = {}
+    merged_embeddings: dict[str, "np.ndarray"] = {}
+    merged_layer_embeddings: dict[str, dict[str, "np.ndarray"]] = {}
+    accessions_by_model: dict[str, "np.ndarray"] = {}
+    sequences_by_model: dict[str, "np.ndarray"] = {}
+    accession_sequence_map: dict[str, str] = {}
+    base_accessions: Optional["np.ndarray"] = None
+    base_sequences: Optional["np.ndarray"] = None
+    aligned_accessions = True
+    aligned_sequences = True
 
-    for path in input_paths[1:]:
+    for path in input_paths:
         data = np.load(path, allow_pickle=True)
-        if not np.array_equal(accessions, data["accessions"]):
-            raise PipelineError("Accession lists do not match between embedding archives.")
-        if not np.array_equal(sequences, data["sequences"]):
-            raise PipelineError("Sequence lists do not match between embedding archives.")
+        accessions = data["accessions"]
+        sequences = data["sequences"]
+        if base_accessions is None:
+            base_accessions = accessions
+            base_sequences = sequences
+        else:
+            if not np.array_equal(base_accessions, accessions):
+                aligned_accessions = False
+            if not np.array_equal(base_sequences, sequences):
+                aligned_sequences = False
+
+        for accession, sequence in zip(accessions, sequences):
+            accession_sequence_map.setdefault(str(accession), str(sequence))
+
+        model_prefixes = sorted(
+            key[: -len("_ids")] for key in data.files if key.endswith("_ids")
+        )
+        for model_key in model_prefixes:
+            accessions_by_model[model_key] = accessions
+            sequences_by_model[model_key] = sequences
+            merged_arrays[f"{model_key}_accessions"] = accessions
+            merged_arrays[f"{model_key}_sequences"] = sequences
+
         for key in data.files:
             value = data[key]
             if key == "embeddings":
@@ -944,12 +1135,53 @@ def merge_all_embeddings(output_path: Path, input_paths: Sequence[Path]) -> None
             else:
                 merged_arrays[key] = value
 
-    merged_arrays["accessions"] = accessions
-    merged_arrays["sequences"] = sequences
+    if aligned_accessions and aligned_sequences and base_accessions is not None:
+        merged_arrays["accessions"] = base_accessions
+        merged_arrays["sequences"] = base_sequences
+    else:
+        merged_arrays["accessions"] = np.array(list(accession_sequence_map), dtype=object)
+        merged_arrays["sequences"] = np.array(
+            [accession_sequence_map[accession] for accession in accession_sequence_map],
+            dtype=object,
+        )
+        merged_arrays["accessions_by_model"] = np.array(accessions_by_model, dtype=object)
+        merged_arrays["sequences_by_model"] = np.array(sequences_by_model, dtype=object)
     merged_arrays["embeddings"] = np.array(merged_embeddings, dtype=object)
     if merged_layer_embeddings:
         merged_arrays["layer_embeddings"] = np.array(merged_layer_embeddings, dtype=object)
     save_npz_fast(output_path, **merged_arrays)
+
+
+def run_merge_model_embeddings(
+    venv_python: Path,
+    output_path: Path,
+    chunk_paths: Sequence[Path],
+) -> None:
+    source_dir = str(FANTASIA_ROOT / "src")
+    code = (
+        "import sys; "
+        "from pathlib import Path; "
+        f"sys.path.insert(0, {source_dir!r}); "
+        "from fantasia_pipeline import merge_model_embeddings; "
+        "merge_model_embeddings(Path(sys.argv[1]), [Path(p) for p in sys.argv[2:]])"
+    )
+    run_subprocess([str(venv_python), "-c", code, str(output_path), *map(str, chunk_paths)])
+
+
+def run_merge_all_embeddings(
+    venv_python: Path,
+    output_path: Path,
+    input_paths: Sequence[Path],
+) -> None:
+    source_dir = str(FANTASIA_ROOT / "src")
+    code = (
+        "import sys; "
+        "from pathlib import Path; "
+        f"sys.path.insert(0, {source_dir!r}); "
+        "from fantasia_pipeline import merge_all_embeddings; "
+        "merge_all_embeddings(Path(sys.argv[1]), [Path(p) for p in sys.argv[2:]])"
+    )
+    run_subprocess([str(venv_python), "-c", code, str(output_path), *map(str, input_paths)])
 
 
 def merge_failure_reports(output_path: Path, report_paths: Sequence[Path]) -> int:
@@ -1081,13 +1313,7 @@ def build_model_groups(embed_models: str, serial_models: bool) -> List[str]:
     models = embed_models.strip()
     if not models:
         raise PipelineError("No embedding models configured.")
-    requested = models.split()
-    unknown = [model for model in requested if model not in SUPPORTED_EMBED_MODELS]
-    if unknown:
-        supported = ", ".join(sorted(SUPPORTED_EMBED_MODELS))
-        raise PipelineError(
-            f"Unsupported embedding model(s): {', '.join(unknown)}. Supported models: {supported}."
-        )
+    requested = parse_embed_model_names(models)
     if serial_models:
         return requested
     return [" ".join(requested)]
@@ -1128,7 +1354,13 @@ def run_chunk_pipeline(
         if config.raw_results_csv is not None:
             lookup_conf["raw_results_path"] = str(config.raw_results_csv)
         lookup_started = time.perf_counter()
-        run_lookup_in_process(lookup_conf, use_gpu_lookup=use_gpu_lookup)
+        run_lookup_subprocess(
+            lookup_conf,
+            use_gpu_lookup=use_gpu_lookup,
+            venv_python=venv_python,
+            config_path=config.chunk_config_dir / "reuse_lookup_config.yaml",
+            device=device,
+        )
         lookup_time_seconds += time.perf_counter() - lookup_started
         skipped_sequences = count_report_rows(config.failure_report)
         total_sequences = count_fasta_sequences(config.fasta_path)
@@ -1237,7 +1469,7 @@ def run_chunk_pipeline(
         if config.model_batch_sizes:
             embedding_cmd.extend(["--model-batch-sizes", *config.model_batch_sizes])
         embedding_started = time.perf_counter()
-        run_subprocess(embedding_cmd)
+        run_subprocess(embedding_cmd, env=torch_runtime_env(device))
         embedding_time_seconds += time.perf_counter() - embedding_started
 
         for job in chunk_jobs:
@@ -1246,7 +1478,7 @@ def run_chunk_pipeline(
             model_chunk_embeds.append(job.chunk_embeddings)
 
         model_merged_emb = config.chunk_embed_dir / f"{model_tag}_merged.npz"
-        merge_model_embeddings(model_merged_emb, model_chunk_embeds)
+        run_merge_model_embeddings(venv_python, model_merged_emb, model_chunk_embeds)
 
         model_merged_results = config.chunk_results_dir / f"{model_tag}_merged.csv"
         model_merged_raw: Optional[Path] = None
@@ -1267,7 +1499,13 @@ def run_chunk_pipeline(
 
         print(f"Running annotation lookup once for merged model group {model_group}")
         lookup_started = time.perf_counter()
-        run_lookup_in_process(lookup_conf, use_gpu_lookup=use_gpu_lookup)
+        run_lookup_subprocess(
+            lookup_conf,
+            use_gpu_lookup=use_gpu_lookup,
+            venv_python=venv_python,
+            config_path=config.chunk_config_dir / f"{model_tag}_lookup_config.yaml",
+            device=device,
+        )
         lookup_time_seconds += time.perf_counter() - lookup_started
 
         append_csv(
@@ -1290,7 +1528,7 @@ def run_chunk_pipeline(
     master_results_tmp.rename(config.results_csv)
     if master_raw_tmp is not None:
         master_raw_tmp.rename(config.raw_results_csv)
-    merge_all_embeddings(config.embeddings_npz, master_embed_files)
+    run_merge_all_embeddings(venv_python, config.embeddings_npz, master_embed_files)
     skipped_sequences = merge_failure_reports(config.failure_report, failure_report_paths)
     postprocess_time_seconds += time.perf_counter() - postprocess_started
     total_sequences = count_fasta_sequences(config.fasta_path)
@@ -1341,6 +1579,8 @@ def run_pipeline(config: PipelineConfig, *, argv: Sequence[str]) -> None:
             device: Optional[str] = None
             stats: Optional[PipelineRunStats] = None
             try:
+                requested_models = parse_embed_model_names(config.embed_models)
+                validate_python_for_models(requested_models)
                 create_virtualenv(config.venv_dir)
                 device = install_packages(config)
                 venv_python = venv_python_executable(config.venv_dir)
