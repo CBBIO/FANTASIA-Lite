@@ -75,6 +75,20 @@ DEFAULT_CHUNK_FAILURE_DIR = DEFAULT_TEMP_DIR / "failures"
 DEFAULT_TOPGO_DIR = DEFAULT_OUTPUT_DIR / "topgo"
 DEFAULT_RUN_LOG = DEFAULT_OUTPUT_DIR / "run.log"
 DEFAULT_RUN_METADATA = DEFAULT_OUTPUT_DIR / "run_metadata.yaml"
+DEFAULT_MODEL_PROVENANCE = DEFAULT_OUTPUT_DIR / "model_provenance.yaml"
+
+MODEL_PROVENANCE_DEFAULTS: Dict[str, Dict[str, str]] = {
+    "prot_t5": {
+        "repository": "Rostlab/prot_t5_xl_uniref50",
+        "revision": "973be27c52ee6474de9c945952a8008aeb2a1a73",
+        "lookup_key": "Prot-T5",
+    },
+    "ankh3": {
+        "repository": "ElnaggarLab/ankh3-large",
+        "revision": "2be091622e8a393f0ef21735070084123c874b6e",
+        "lookup_key": "Ankh3-Large",
+    },
+}
 
 _ACTIVE_LOG_HANDLE: Optional[TextIO] = None
 
@@ -151,6 +165,7 @@ class PipelineConfig:
     reuse_embeddings: bool
     run_log: Path
     run_metadata_yaml: Path
+    model_provenance_yaml: Path
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> "PipelineConfig":
@@ -220,6 +235,7 @@ class PipelineConfig:
             reuse_embeddings=args.reuse_embeddings,
             run_log=Path(args.run_log).resolve(),
             run_metadata_yaml=Path(args.run_metadata_yaml).resolve(),
+            model_provenance_yaml=Path(args.model_provenance_yaml).resolve(),
         )
 
 
@@ -485,6 +501,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Path to a YAML file recording run metadata and resolved parameters.",
     )
     parser.add_argument(
+        "--model-provenance-yaml",
+        default=str(DEFAULT_MODEL_PROVENANCE),
+        help="Path to model repository, revision, and software provenance.",
+    )
+    parser.add_argument(
         "--reuse-embeddings",
         action="store_true",
         help=(
@@ -636,6 +657,7 @@ def build_run_metadata(
             "config_yaml": str(config.config_yaml),
             "run_log": str(config.run_log),
             "run_metadata_yaml": str(config.run_metadata_yaml),
+            "model_provenance_yaml": str(config.model_provenance_yaml),
             "topgo_dir": str(config.topgo_dir),
         },
         "parameters": {},
@@ -665,6 +687,79 @@ def build_run_metadata(
             "measured_total": round(stats.measured_stage_time_seconds, 3),
         }
     return metadata
+
+
+def _managed_package_versions(python_executable: Path) -> Dict[str, str]:
+    """Read relevant package versions from the managed Lite environment."""
+    package_script = """
+import importlib.metadata
+import json
+import platform
+packages = [
+    "fantasia-lite", "transformers", "huggingface-hub", "torch",
+    "numpy", "pandas", "scipy", "biopython", "sentencepiece",
+]
+versions = {"python": platform.python_version()}
+for package in packages:
+    try:
+        versions[package] = importlib.metadata.version(package)
+    except importlib.metadata.PackageNotFoundError:
+        versions[package] = "not installed"
+print(json.dumps(versions))
+"""
+    try:
+        completed = subprocess.run(
+            [str(python_executable), "-c", package_script],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return json.loads(completed.stdout)
+    except Exception as exc:
+        return {"collection_error": str(exc)}
+
+
+def build_model_provenance(
+    config: PipelineConfig,
+    *,
+    python_executable: Optional[Path] = None,
+    device: Optional[str] = None,
+) -> Dict[str, object]:
+    """Build immutable model and managed-software provenance for a run."""
+    requested_models = config.embed_models.split()
+    models: Dict[str, object] = {}
+    for model_name in requested_models:
+        model_record = MODEL_PROVENANCE_DEFAULTS.get(model_name)
+        if model_record is None:
+            models[model_name] = {"error": "unknown model"}
+            continue
+        models[model_name] = {
+            **model_record,
+            "revision_enforced": True,
+        }
+    software: Dict[str, str]
+    if python_executable is None:
+        software = {"status": "managed environment not installed yet"}
+    else:
+        software = _managed_package_versions(python_executable)
+    return {
+        "schema_version": 1,
+        "recorded_at": datetime.now().isoformat(),
+        "fantasia_lite": {
+            "version": "0.1.0",
+            "git_branch": _safe_git_output(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"]
+            ),
+            "git_commit": _safe_git_output(["git", "rev-parse", "HEAD"]),
+        },
+        "models": models,
+        "revision_policy": (
+            "The recorded Hugging Face commit is passed as revision= to both "
+            "AutoTokenizer.from_pretrained and AutoModel.from_pretrained."
+        ),
+        "resolved_device": device,
+        "software": software,
+    }
 
 
 def write_run_metadata(path: Path, metadata: Dict[str, object]) -> None:
@@ -1555,6 +1650,7 @@ def run_pipeline(config: PipelineConfig, *, argv: Sequence[str]) -> None:
         config.topgo_dir,
         config.run_log,
         config.run_metadata_yaml,
+        config.model_provenance_yaml,
     ):
         if path:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -1567,6 +1663,10 @@ def run_pipeline(config: PipelineConfig, *, argv: Sequence[str]) -> None:
         sys.stdout = TeeStream(original_stdout, log_handle)
         sys.stderr = TeeStream(original_stderr, log_handle)
         try:
+            write_run_metadata(
+                config.model_provenance_yaml,
+                build_model_provenance(config),
+            )
             write_run_metadata(
                 config.run_metadata_yaml,
                 build_run_metadata(
@@ -1584,6 +1684,12 @@ def run_pipeline(config: PipelineConfig, *, argv: Sequence[str]) -> None:
                 create_virtualenv(config.venv_dir)
                 device = install_packages(config)
                 venv_python = venv_python_executable(config.venv_dir)
+                write_run_metadata(
+                    config.model_provenance_yaml,
+                    build_model_provenance(
+                        config, python_executable=venv_python, device=device
+                    ),
+                )
                 ensure_lookup_artifacts(config)
                 stats = run_chunk_pipeline(config, venv_python, device)
                 write_config_yaml(config)

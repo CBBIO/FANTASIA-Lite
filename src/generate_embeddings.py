@@ -675,6 +675,7 @@ def load_model_components(
     """Load tokenizer and model for ``model_name`` and move to ``device``."""
     model_info = MODEL_REGISTRY[model_name]
     hf_model_id = model_info["hf_id"]
+    revision = model_info["revision"]
     print(f"Loading model {model_name} ({hf_model_id})…")
     tokenizer_kwargs = dict(model_info.get("tokenizer_kwargs", {}))
     model_kwargs = dict(model_info.get("model_kwargs", {}))

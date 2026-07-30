@@ -284,37 +284,42 @@ These helper scripts use paths relative to the repository root. Run them from in
 FANTASIA Lite V1.1is installed by cloning the repository, placing the lookup bundle in `data/lookup/`, and running a simple setup check from inside the cloned folder.
 
 ### Step 1: Clone the Repository
+FANTASIA Lite annotates protein FASTA files by embedding each query, searching
+a local reference table, and transferring experimentally supported Gene
+Ontology (GO) terms from nearby reference proteins.
+
+Lite runs from flat files without PostgreSQL or RabbitMQ. An NVIDIA GPU is
+strongly recommended; CPU mode is available as a slower fallback. For
+service-backed reference management and all five built-in embedders, use
+[FANTASIA Full](https://github.com/CBBIO/FANTASIA).
+
+## Run your first search
+
+### 1. Clone Lite
+
 ```bash
 git clone https://github.com/CBBIO/FANTASIA-Lite.git
 cd FANTASIA-Lite
-```
-
-FANTASIA Lite V1.1 is the current default branch of this repository. The previous Lite V0 state remains available in the `fantasia-lite-V0` branch.
-
-### Step 2: Add the Lookup Bundle
-The `data/lookup/` directories are not included in Git clones. Create them
-before downloading or extracting the lookup data:
-
-```bash
 mkdir -p data/lookup
 ```
 
-Download `fantasia_lite_data_folder.tgz` from Zenodo and extract it from the
-repository root:
+### 2. Install the reference bundle
+
+Download `fantasia_lite_data_folder.tgz` from
+[Zenodo](https://doi.org/10.5281/zenodo.19742925), place it in the repository
+root, and extract it:
 
 ```bash
 tar -xzf fantasia_lite_data_folder.tgz
+test -s data/lookup/lookup_table.npz
+test -s data/lookup/annotations.json
+test -s data/lookup/accessions.json
 ```
 
-Alternatively, download the following three files separately and place each
-one directly in `data/lookup/`:
+The archive contains the `data/lookup/` path. Alternatively, download those
+three files separately into `data/lookup/`.
 
-- `lookup_table.npz`
-- `annotations.json`
-- `accessions.json`
-
-### Step 3: Run a Setup Check
-The recommended validation step for Lite V1.1 is:
+### 3. Run the bundled example
 
 ```bash
 ./scripts/minimal_pipeline.sh fasta_test/test.fa
@@ -326,300 +331,104 @@ The default minimal script uses `prot_t5`. If your system default `python3` is n
 PYTHON_BIN=/path/to/python3.12 ./scripts/minimal_pipeline.sh fasta_test/test.fa
 ```
 
-This setup check:
+The first run creates `venv/`, installs dependencies, and downloads ProtT5.
+Lite automatically uses CUDA when available.
 
-1. creates or reuses the local virtual environment
-2. installs the required dependencies automatically
-3. runs the current Lite V1.1 default path on the small bundled test FASTA
-4. writes results to a timestamped `outputs_YYYYMMDD_HHMMSS/` directory
-5. confirms that embedding, lookup, and result writing are working correctly
-
-**Expected output**: If everything works correctly, you'll see:
-- Virtual environment creation (first run)
-- Dependency installation progress
-- Embedding generation progress bar
-- Annotation results written to the output directory
-- Success message
-
-**Time estimate**: 
-- First run: a few minutes to about 10-20 minutes, depending on dependency installation and model download state
-- Subsequent runs: 1-2 minutes (only processes test file)
-
-### Step 4: Process Your Own Data
-The easiest way to run Lite V1.1 in its intended default mode is:
+### 4. Run your proteome
 
 ```bash
-./scripts/minimal_pipeline.sh your_proteins.fa
+./scripts/minimal_pipeline.sh data/my_proteome.faa.gz
 ```
 
-This minimal runner is the recommended entrypoint for fast local annotation and for integration into larger workflows. It uses:
-- automatic device detection
-- `prot_t5`
-- cosine lookup
-- `k=1`
-- full precision
-- no sequence truncation unless you explicitly request it elsewhere
+Plain and gzip-compressed FASTA files are accepted. Gzip input is decompressed
+while reading.
 
-You can still call the full pipeline directly when you want more control:
+## Default behavior
+
+The helper script runs ProtT5 with cosine distance, `k=1`, float32 embeddings,
+no sequence truncation, GPU lookup when CUDA is available, and TopGO disabled.
+Each invocation creates `outputs_<timestamp>/`.
+
+| To change | Option |
+|---|---|
+| retrieve five donors | `--limit-per-entry 5` |
+| force GPU | `--device cuda --use-gpu-lookup` |
+| force CPU fallback | `--device cpu --no-gpu-lookup` |
+| use Ankh3-Large | `--serial-models --embed-models ankh3` |
+| reuse embeddings | `--reuse-embeddings --embeddings-npz FILE` |
+| enable TopGO | `--topgo` |
+| truncate explicitly | `--length-filter N` (`0` is uncapped) |
+
+Show all options:
 
 ```bash
-fantasia_pipeline --serial-models --embed-models prot_t5 your_proteins.fa
+python3 src/fantasia_pipeline.py --help
 ```
 
-For all five model spaces, use Python 3.12 and keep serial model execution enabled:
-
-```bash
-python3.12 src/fantasia_pipeline.py \
-    --serial-models \
-    --embed-models "esm2 prost_t5 prot_t5 ankh3 esmc" \
-    --model-batch-sizes esm2=1 prost_t5=1 prot_t5=4 ankh3=4 esmc=1 \
-    your_proteins.fa
-```
-
-## Device Selection
-
-FANTASIA Lite automatically detects whether CUDA is available:
-- If an NVIDIA GPU is detected, the pipeline defaults to `cuda`
-- Otherwise it falls back to `cpu`
-
-This detection is performed automatically by `fantasia_pipeline.py`, so most users do not need to set `--device` manually.
-
-You can still override it explicitly:
-
-```bash
-# Force GPU
-fantasia_pipeline --device cuda your_proteins.fa
-
-# Force CPU
-fantasia_pipeline --device cpu your_proteins.fa
-```
-
-On RTX 50-series GPUs such as the RTX 5090, do not force an older CUDA wheel index such as `cu124`. The default installer uses the current package index and was validated on an RTX 5090 with `torch 2.13.0` and CUDA 13 packages. If you override `--torch-index` or `TORCH_INDEX`, make sure the selected PyTorch wheel supports the GPU compute capability.
-
-## Performance Tuning
-
-FANTASIA Lite is intentionally simpler than the full FANTASIA stack, but that simplicity means performance depends heavily on the embedding and lookup settings.
-
-### Important Distinction: What Each Batch Size Means
-
-- `--sequence-queue-package`
-  Outer orchestration size. This controls how many input sequences are grouped into one work package before embedding. It does **not** change search completeness.
-
-- `--embed-batch-size`
-  Default PLM forward-pass batch size. This controls how many sequences are embedded together on the GPU or CPU.
-
-- `--model-batch-sizes prot_t5=4 ankh3=4`
-  Per-model overrides for embedding forward-pass batch size. These matter only for models you actually run. The best value depends on GPU memory and sequence lengths: if you see CUDA OOM skips in `failed_sequences.csv`, lower the relevant model batch size; if you see no skips and have spare memory, you can try increasing it.
-
-  For full five-model CUDA runs, a conservative starting point is `esm2=1 prost_t5=1 prot_t5=4 ankh3=4 esmc=1`.
-
-- `--lookup-batch-size`
-  Number of **query embeddings** processed together during nearest-neighbor search. Each lookup batch is still compared against the **full reference lookup table**. It does **not** search only the first `N` references and then stop.
-
-### Full-Length Embeddings vs Truncation
-
-By default, sequence truncation is **disabled**:
-
-```bash
---length-filter 0
-```
-
-That means FANTASIA Lite will try to embed the full sequence. If the GPU can handle it, the full sequence is used. If you want to cap sequence length for safety or speed, set a positive value such as `--length-filter 2000`.
-
-### Recommended Starting Profiles
-
-For the fastest general GPU run without truncation:
-
-```bash
-fantasia_pipeline \
-    --device cuda \
-    --use-gpu-lookup \
-    --serial-models \
-    --embed-models prot_t5 \
-    --sequence-queue-package 100 \
-    --embed-batch-size 4 \
-    --model-batch-sizes prot_t5=4 \
-    --lookup-batch-size 1024 \
-    your_proteins.fa
-```
-
-This is the recommended starting profile for FANTASIA Lite on 24 GB-class GPUs when you want full-length embeddings and the fastest practical proteome-scale runtime. On a 20,223-sequence PRUB1 proteome, this profile completed end-to-end in about 24 minutes with GPU lookup enabled and processed 99.72% of proteins successfully.
-
-At the end of each run, the pipeline prints a processed/skipped summary such as:
+## Results and provenance
 
 ```text
-Sequence summary: 20167/20223 processed (99.72%), 56/20223 skipped (0.28%).
+outputs_<timestamp>/
+├── results.csv
+├── query_embeddings.npz
+├── failed_sequences.csv
+├── fantasia_config.yaml
+├── run_metadata.yaml
+├── model_provenance.yaml
+├── run.log
+├── k.<N>.results.csv       # when k > 1
+└── topgo/                  # only with --topgo
 ```
 
-Skipped proteins are reported in `failed_sequences.csv` and are typically extreme long-sequence CUDA OOM cases rather than ordinary proteins.
+- `results.csv` contains final consolidated GO assignments. A protein can have
+  multiple rows because it can receive multiple GO terms.
+- `k.<N>.results.csv` is the donor-level table before GO consolidation. It
+  preserves `hit_rank`, reference IDs, UniProt accessions, distances, and GO
+  terms.
+- `failed_sequences.csv` reports proteins that could not be embedded.
+- `run_metadata.yaml` records the command, Git commit, parameters, device,
+  coverage, and stage timings.
+- `model_provenance.yaml` records model repositories, enforced Hugging Face
+  revisions, lookup keys, device, Python, and package versions.
 
-For smaller GPUs:
+Lite pins both tokenizer and model downloads to these commits:
+
+| Lite model | Repository | Enforced revision |
+|---|---|---|
+| ProtT5 | `Rostlab/prot_t5_xl_uniref50` | `973be27c52ee6474de9c945952a8008aeb2a1a73` |
+| Ankh3-Large | `ElnaggarLab/ankh3-large` | `2be091622e8a393f0ef21735070084123c874b6e` |
+
+Keep both YAML files with published results.
+
+## Common commands
+
+GPU run with tuned batches:
 
 ```bash
-fantasia_pipeline \
-    --device cuda \
-    --use-gpu-lookup \
-    --serial-models \
-    --embed-models prot_t5 \
-    --sequence-queue-package 50 \
-    --embed-batch-size 4 \
-    --model-batch-sizes prot_t5=4 \
-    --lookup-batch-size 256 \
-    your_proteins.fa
+python3 src/fantasia_pipeline.py \
+  --device cuda --use-gpu-lookup --serial-models \
+  --embed-models prot_t5 --model-batch-sizes prot_t5=4 \
+  --lookup-batch-size 1024 data/my_proteome.faa.gz
 ```
 
-For CPU-only systems:
+Retrieve five donors and retain the raw neighborhood:
 
 ```bash
-fantasia_pipeline \
-    --device cpu \
-    --serial-models \
-    --embed-models prot_t5 \
-    your_proteins.fa
+python3 src/fantasia_pipeline.py \
+  --embed-models prot_t5 --distance-metric cosine \
+  --limit-per-entry 5 data/my_proteome.faa.gz
 ```
 
-### 2. Performance Analysis (`pipeline_timing_analyzer.py`)
-For benchmarking, performance testing, and systematic analysis:
+Reuse an existing query archive:
 
 ```bash
-# Basic timing analysis - processes all test files with the default model
-python3 src/pipeline_timing_analyzer.py
-
-# Quick test with specific file and single model
-python3 src/pipeline_timing_analyzer.py \
-    --files fasta_test/test.fa \
-    --model prot_t5 \
-    --report-csv quick_benchmark.csv
-
-# Compare models on specific files
-python3 src/pipeline_timing_analyzer.py \
-    --files fasta_test/test.fa fasta_test/UP000001940_6239.fasta \
-    --model prot_t5 ankh3 \
-    --report-csv model_comparison.csv
-
-# Custom analysis with all options
-python3 src/pipeline_timing_analyzer.py \
-    --fasta-dir fasta_test \
-    --model ankh3 \
-    --files fasta_test/test.fa \
-    --report-csv gpu_benchmark.csv
+python3 src/fantasia_pipeline.py \
+  --reuse-embeddings \
+  --embeddings-npz outputs_<timestamp>/query_embeddings.npz \
+  --limit-per-entry 5 data/my_proteome.faa.gz
 ```
 
-**Key Options:**
-- `--files`: Specify individual FASTA files to process
-- `--model`: Choose specific model(s) to test (default: `prot_t5`)
-- `--report-csv`: Output file for timing results (default: `pipeline_timing_analysis.csv`)
-- `--fasta-dir`: Directory containing FASTA files (default: `fasta_test`)
-
-## Repository Structure
-```
-FANTASIA-Lite/
-├── README.md                                # This documentation
-├── LICENSE                                  # License information
-├── .gitignore                               # Git ignore rules
-├── data/
-│   └── lookup/                              # Lookup database (download from Zenodo)
-│       ├── accessions.json                  # Protein accession mappings
-│       ├── annotations.json                 # GO annotation data
-│       └── lookup_table.npz                 # Pre-computed embeddings database
-├── fasta_test/                              # Test FASTA files for validation and benchmarking
-│   ├── test.fa                              # Small test file (33 sequences)
-│   ├── test_failure.fa                      # Test file with problematic sequences
-│   ├── PRUB1_longiso.pep                    # Paratomella rubra proteome (non-model worm, not represented in standard databases)
-│   ├── UP000001940_6239.fasta               # C. elegans proteome sample
-│   └── MUSM_10090.fasta                     # Mouse proteome sample used for Lite V1.1 benchmarking
-└── src/
-    ├── fantasia_pipeline.py                 # Main annotation pipeline
-    ├── fantasia_no_db.py                    # CPU lookup engine
-    ├── fantasia_no_db_gpu.py                # CUDA lookup engine
-    ├── generate_embeddings.py               # Embedding generation module
-    └── pipeline_timing_analyzer.py          # Performance analysis and benchmarking tool
-```
-
-### Test Files (`fasta_test/`)
-The repository includes comprehensive test files for validation and benchmarking:
-- **`test.fa`**: Small test file with 33 valid sequences for quick validation
-- **`test_failure.fa`**: Contains problematic sequences to test error handling
-- **`PRUB1_longiso.pep`**: Proteome of the non-model worm *Paratomella rubra*, useful as a realistic dark-proteome style test case outside standard database-centric examples
-- **`UP000001940_6239.fasta`**: Complete C. elegans proteome for realistic testing
-- **`MUSM_10090.fasta`**: Mouse proteome sample used in the revalidated Lite V1.1 benchmark set
-
-## Outputs
-
-### Standard Pipeline Outputs (`outputs_YYYYMMDD_HHMMSS/`)
-Each pipeline run creates a timestamped directory containing:
-- **`results.csv`**: Main GO annotation results after GO-term consolidation and best-row selection
-- **`raw_results.csv`** or **`k.<N>.results.csv`**: Optional raw neighbor-level results before GO-term consolidation
-- **`query_embeddings.npz`**: Generated embeddings for input sequences  
-- **`failed_sequences.csv`**: Sequences that failed processing with error details
-- **`fantasia_config.yaml`**: Configuration used for the run
-- **`run_metadata.yaml`**: Timestamped run metadata for traceability, including resolved parameters and output paths
-- **`run.log`**: Timestamped pipeline log capturing console output from the run
-- **`topgo/`**: Optional TopGO-compatible files for downstream analysis when `--topgo` is enabled
-  - `<model>.topgo.<F|P|C>.txt`: GO terms by functional category (Function/Process/Component)
-
-### Output File Types and How to Read Them
-
-- **`results.csv`**: CSV table. This is the main file most users want. Each row is a final GO annotation kept after consolidation, so it is the best place to inspect the final biological interpretation of the run.
-- **`raw_results.csv`** or **`k.<N>.results.csv`**: CSV table. This is the pre-consolidation lookup output. Use it when you want to inspect neighbor structure, `hit_rank`, or the effect of `k > 1`.
-- **`query_embeddings.npz`**: NumPy archive. This stores the generated query embeddings and is mainly useful for reuse, benchmarking, or embedding-only downstream work rather than manual inspection.
-- **`failed_sequences.csv`**: CSV table. This lists the sequences that were skipped or failed, together with the error reason. In full-length GPU runs, these are often extreme long-sequence CUDA OOM cases.
-- **`fantasia_config.yaml`**: YAML text file. This captures the effective run configuration and is the main provenance file for reproducing a run.
-- **`run_metadata.yaml`**: YAML text file. This records traceability metadata such as timestamps, resolved parameters, output paths, summary counts, and stage timings.
-- **`run.log`**: Plain-text log. This is the chronological console transcript of the run and is the best file to inspect when debugging behavior or checking progress details after the fact.
-- **`topgo/`**: Directory of plain-text TopGO helper files. These are only created when `--topgo` is enabled and are meant for downstream enrichment workflows, not for primary lookup interpretation.
-
-**`results.csv` vs `raw_results.csv`**
-
-- **`raw_results.csv`** preserves the direct lookup output. It keeps the selected nearest-neighbor hit structure, including `hit_rank`, before GO-term consolidation. If one reference hit carries multiple GO terms, or if `--limit-per-entry` is greater than `1`, this file can contain multiple rows for the same query and hit.
-- **`results.csv`** is the cleaned final annotation table. It consolidates GO terms and keeps the best supporting row for each `(query, model, GO term, category)` combination.
-- If you only need final annotations, `results.csv` is usually enough. If you want to inspect the underlying hit structure or retain multiple neighbors before consolidation, keep `raw_results.csv`.
-
-**Column meanings**
-
-- `query_accession`: input sequence identifier from the FASTA file
-- `hit_rank`: nearest-neighbor rank in the raw output only (`1` = best hit, `2` = second hit, etc.)
-- `reference_id`: internal lookup-bundle identifier for the matched reference entry
-- `model_key`: embedding space used for the match, such as `Prot-T5` or `Ankh3-Large`
-- `distance`: embedding-space distance between query and matched reference; lower is better
-- `reliability_index`: normalized score derived from distance and clipped to `[0, 1]`; higher is better
-- `distance_metric`: lookup metric used for the match, usually `cosine` in Lite V1
-- `uniprot_accession`: UniProt accession of the matched reference protein
-- `go_id`: transferred GO identifier
-- `category`: GO namespace (`F` = Molecular Function, `P` = Biological Process, `C` = Cellular Component)
-- `go_description`: human-readable GO term description
-- `evidence_codes`: evidence code or merged evidence codes supporting that GO term in the reference protein
-
-### Timing Analyzer Outputs
-- **`pipeline_timing_analysis.csv`**: Comprehensive performance metrics including:
-  - GPU model and memory specifications
-  - Runtime and processing rates
-  - GPU/CPU usage information  
-  - Sequence processing statistics
-  - Successfully processed vs failed sequences
-  - GPU memory usage monitoring
-  - Model comparison data
-  - Timestamped pipeline output directory references
-
-**Note**: Requires nvidia-smi for GPU monitoring (optional for CPU-only systems).
-
-## Performance Analysis Features
-
-The `pipeline_timing_analyzer.py` tool provides comprehensive benchmarking capabilities:
-
-- **Hardware Comparison**: Compare GPU vs CPU performance across different systems
-- **Model Evaluation**: Systematic comparison across the supported embedding models
-- **Scalability Testing**: Analyze performance across different file sizes and sequence counts
-- **Regression Testing**: Track performance changes across pipeline versions
-- **Resource Monitoring**: GPU memory usage and processing rate analysis
-
-## Performance Benchmarks
-
-The Lite V1.1 pipeline changed substantially, so older benchmark matrices from earlier Lite revisions are no longer directly representative. The benchmark section below only reports runs that have been revalidated after the current V1.1 optimization work.
-
-### Currently Revalidated
-
-The following end-to-end benchmarks reflect the current recommended fast profile:
+Generate embeddings without GO lookup:
 
 ```bash
 ./scripts/default_last_layer.sh fasta_test/PRUB1_longiso.pep
@@ -657,7 +466,7 @@ For the revalidated `k=5` PRUB1 run, the recorded stage split was approximately 
 
 ### Five-Sequence Validation Tests
 
-Small validation runs on the first 5 sequences of `fasta_test/test.fa` were used to confirm that Lite V1.1 behaves correctly in CPU-only mode, GPU `k=5` mode, and layered embedding export mode:
+Small validation runs on the first 5 sequences of `fasta_test/test.fa` were used to confirm that Lite V1 behaves correctly in CPU-only mode, GPU `k=5` mode, and layered embedding export mode:
 
 | Test | Device | Settings | Runtime | Notes |
 |------|--------|----------|---------|-------|
@@ -668,10 +477,10 @@ Small validation runs on the first 5 sequences of `fasta_test/test.fa` were used
 
 Notes:
 - The skipped sequences were extreme long-protein CUDA OOM cases, not ordinary proteins.
-- This benchmark uses the current Lite V1.1 merged-lookup flow rather than the older per-chunk lookup behavior.
+- This benchmark uses the current Lite V1 merged-lookup flow rather than the older per-chunk lookup behavior.
 - For the revalidated C. elegans run, the recorded stage split was approximately 22m 42s embedding, 46.46s lookup, and 1.09s post-processing.
 - For the revalidated mouse run, the recorded stage split was approximately 35m 05s embedding, 30.79s lookup, and 0.86s post-processing.
-- Additional benchmark tables for other datasets and hardware should be regenerated before being treated as representative of Lite V1.1.
+- Additional benchmark tables for other datasets and hardware should be regenerated before being treated as representative of Lite V1.
 
 ## Advanced Usage
 
@@ -698,7 +507,7 @@ python3 src/pipeline_timing_analyzer.py \
     --report-csv batch_results.csv
 ```
 
-The timing analyzer is useful for benchmarking and regression testing. In Lite V1.1 it now also reads per-run stage timings from `run_metadata.yaml`, so benchmark reports can separate embedding time, lookup time, and post-processing time.
+The timing analyzer is useful for benchmarking and regression testing. In Lite V1 it now also reads per-run stage timings from `run_metadata.yaml`, so benchmark reports can separate embedding time, lookup time, and post-processing time.
 
 ### Memory Optimization
 For large files or limited memory systems:
@@ -711,32 +520,24 @@ fantasia_pipeline \
     large_proteome.fa
 ```
 
-For the current Lite V1.1 fast path, `prot_t5` with `--model-batch-sizes prot_t5=4` is the best starting point on a 24 GB-class GPU. If you see CUDA OOM skips, reduce the model batch size further before changing lookup settings.
+For the current Lite V1 fast path, `prot_t5` with `--model-batch-sizes prot_t5=4` is the best starting point on a 24 GB-class GPU. If you see CUDA OOM skips, reduce the model batch size further before changing lookup settings.
 
 ## Supported Models
 
 ### Embedder vs Lookup
 
-In Lite V1.1, the embedding step and lookup step are intentionally separated:
+In Lite V1, the embedding step and lookup step are intentionally separated:
 
 - The **embedder** is the local model-inference component in `src/generate_embeddings.py`
 - The **lookup** is the nearest-neighbor transfer step against the flat-file reference bundle in `data/lookup/`
 
-Lite V1.1 exposes the same five model spaces end to end. The model names accepted by `--embed-models` are the canonical CLI names below; common aliases such as `ESM`, `Prost-T5`, `Prot-T5`, `Ankh3-Large`, and `ESM3c` are normalized automatically.
+These two layers are related, but they do not currently expose exactly the same model set through the Lite CLI.
 
 ### Built-in Lite Embedder
 
 The built-in Lite embedder currently supports:
-
-| CLI name | Lookup key | Model source |
-|----------|------------|--------------|
-| `esm2` | `ESM` | `facebook/esm2_t33_650M_UR50D` |
-| `prost_t5` | `Prost-T5` | `Rostlab/ProstT5` |
-| `prot_t5` | `Prot-T5` | `Rostlab/prot_t5_xl_uniref50` |
-| `ankh3` | `Ankh3-Large` | `ElnaggarLab/ankh3-large` |
-| `esmc` | `ESM3c` | `EvolutionaryScale/esmc-600m-2024-12` |
-
-`prot_t5` remains the default because it is the best fast-path starting point for routine annotation. `esm2`, `prost_t5`, `ankh3`, and `esmc` are available when you want broader model coverage or model comparison.
+- **`prot_t5`**: Protein T5 model (recommended, good balance of speed and accuracy)
+- **`ankh3`**: ANKH large protein language model (slower but potentially more accurate)
 
 The Lite embedder can now also export:
 - default last-layer embeddings
@@ -744,8 +545,6 @@ The Lite embedder can now also export:
 - all available layers with `--all-layers`
 
 This embedding-only mode is independent of lookup. In other words, Lite can generate embeddings locally for the models above, with optional layer export, even when you do not want to run annotation lookup.
-
-ESM-C depends on `esm==3.2.3`; use Python 3.12 for any workflow that includes `esmc`.
 
 ### Lookup Bundle Coverage
 
@@ -756,21 +555,17 @@ The bundled Lite lookup table currently contains last-layer reference embeddings
 - **Ankh3-Large**
 - **ESM3c**
 
-These names correspond to the lookup keys written into `query_embeddings.npz`. Query and reference embeddings must be in the same model space for lookup to produce meaningful results.
+So the lookup bundle is broader than the built-in Lite embedder. The lookup side is not limited to only two model spaces; the current local embedding CLI is the narrower component.
 
 ### Current End-to-End Lite Pipeline
 
-The current built-in end-to-end Lite pipeline supports the five last-layer model spaces in the lookup bundle:
+The current built-in end-to-end Lite pipeline is intended for the last-layer models that the Lite embedder can generate directly today:
+- **ProtT5**
+- **Ankh3**
 
-```bash
-python3.12 src/fantasia_pipeline.py \
-    --serial-models \
-    --embed-models "esm2 prost_t5 prot_t5 ankh3 esmc" \
-    --model-batch-sizes esm2=1 prost_t5=1 prot_t5=4 ankh3=4 esmc=1 \
-    your_proteins.fa
-```
-
-For multi-model runs, keep `--serial-models` enabled unless you have already profiled memory use on your hardware. Serial execution reduces peak memory because it avoids loading several embedders at the same time.
+If you provide externally generated embeddings that match the lookup bundle keys and format, the lookup layer itself is separate and can in principle operate on the additional lookup-table models as well. So the practical distinction is:
+- built-in Lite embedding CLI: currently `prot_t5` and `ankh3`, with optional layer export
+- bundled lookup table: `ESM-2`, `ProstT5`, `ProtT5`, `Ankh3-Large`, and `ESM3c`, using last-layer reference embeddings
 
 ## File Format Support
 - **Input**: FASTA files (`.fa`, `.faa`, `.fasta`) and gzip-compressed versions (`.fa.gz`, `.fasta.gz`)
@@ -778,70 +573,30 @@ For multi-model runs, keep `--serial-models` enabled unless you have already pro
 
 ## Troubleshooting
 
-### Common Issues
-- **ESM-C install fails on Python 3.13+**: Use Python 3.12. `esm==3.2.3` currently supports Python `>=3.12,<3.13`, and the pipeline fails early with this message when `esmc` is requested from an unsupported interpreter.
-- **CUDA compatibility**: Set `--torch-index` or the `TORCH_INDEX` environment variable only when you intentionally need a specific PyTorch package index for your hardware.
-- **Memory errors**: Use `--serial-models` and process one model at a time
-- **Missing dependencies**: The pipeline automatically installs required packages
-- **Lookup bundle missing**: Download from Zenodo and extract to `data/lookup/`
-- **Out-of-memory errors**: Reduce `--embed-models` to a single model and keep `--serial-models` enabled
-- **torchvision/torchtext conflicts**: The pipeline intentionally installs `esm==3.2.3` with `--no-deps` for ESM-C and installs only the runtime dependencies it uses. A clean pipeline environment should not need `torchvision` or `torchtext`.
+**Lookup files missing:** ensure the three files are directly under
+`data/lookup/`, not in an additional nested directory.
 
-### Performance Optimization
-- **GPU memory**: Use `--serial-models` to prevent multiple models loading simultaneously
-- **Processing speed**: Start with `prot_t5` model for fastest results
-- **Large files**: Increase `--chunk-size` for better memory management
+**CUDA unavailable:** check `nvidia-smi`; otherwise use
+`--device cpu --no-gpu-lookup` as a slower fallback.
 
-### Important Notes
-- Gzipped FASTA files are decompressed on the fly; no manual prep is required
-- Sequences longer than the model limit are skipped and logged; other sequences continue
-- Each pipeline run creates a timestamped directory (`outputs_YYYYMMDD_HHMMSS`)
-- Parallel model execution is technically possible but rarely worth the memory cost
+**CUDA out of memory:** use one model with `--serial-models`, then reduce
+`--model-batch-sizes`, `--embed-batch-size`, and `--max-batch-residues`.
+Failures for individual proteins remain listed in `failed_sequences.csv`.
 
-## FAQ
-- **Can I use `.gz` FASTA files?** Yes. Compression is handled automatically.
-- **What if a sequence is too long?** It is recorded in `outputs/failed_sequences.csv`; the rest of the batch continues.
-- **Does the lookup bundle include ESM3c?** Yes. The current Lite lookup bundle includes `ESM3c`, and the built-in Lite embedder can generate matching query embeddings with `--embed-models esmc`.
-- **Can I run all five models locally?** Yes, with Python 3.12 and enough memory. Use `--serial-models` and conservative per-model batch sizes first.
-- **Do I need torchvision or torchtext for ESM-C?** No. The Lite ESM-C path was validated without `torchvision` and `torchtext`.
+**Several rows per protein:** expected—`results.csv` has one row per retained
+query/model/GO/category combination.
 
+## Further documentation
 
-## Acknowledgements
+- [Detailed usage reference](docs/usage_reference.md)
+- [Lookup-bundle audit](docs/lookup_bundle_audit_2026-04-26.md)
+- [FANTASIA Full](https://github.com/CBBIO/FANTASIA)
 
-FANTASIA Lite V1.1 is derived from the full [FANTASIA pipeline](https://github.com/CBBIO/FANTASIA) and incorporates methods from [GOPredSim](https://github.com/Rostlab/goPredSim). Transformer models are provided via [Hugging Face](https://huggingface.co/).
+## Citation
 
-**Key Publications:**
+Please cite this repository, the version-specific Zenodo lookup record used in
+the analysis, and the relevant FANTASIA publications:
+
 - [Performance of protein language models in model organisms](https://doi.org/10.1093/nargab/lqae078)
 - [Application of FANTASIA to functional annotation of dark proteomes](https://doi.org/10.1038/s42003-025-08651-2)
 - [Protocol explaining FANTASIA](https://doi.org/10.1007/978-1-0716-4623-6_8)
-
-**Citing FANTASIA**
-
-If you use FANTASIA in your research, please cite the following publications:
-
-- Martínez-Redondo, G. I., Barrios, I., Vázquez-Valls, M., Rojas, A. M., & Fernández, R. (2024).Illuminating the functional landscape of the dark proteome across the Animal Tree of Life.
-    DOI: 10.1101/2024.02.28.582465
-
-- Barrios-Núñez, I., Martínez-Redondo, G. I., Medina-Burgos, P., Cases, I., Fernández, R., & Rojas, A. M. (2024). Decoding proteome functional information in model organisms using protein language models.
-    DOI: 10.1101/2024.02.14.580341
-
-
-**Main Developers:**
-- Ana M. Rojas: a.rojas.m@csic.es
-- Àlex Domínguez Rodríguez: adomrod4@upo.es
-
-**Project Team:**
-- Ana M. Rojas: a.rojas.m@csic.es
-- Rosa Fernández: rosa.fernandez@ibe.upf-csic.es
-- Aureliano Bombarely: abombarely@ibmcp.upv.es
-- Ildefonso Cases: icasdia@upo.es
-- Àlex Domínguez Rodríguez: adomrod4@upo.es
-- Gemma I. Martínez-Redondo: gemma.martinez@ibe.upf-csic.es
-- Belén Carbonetto: belen.carbonetto.metazomics@gmail.com
-- Iñigo de Martín: imartinagirre@gmail.com
-- Sofía García Juan
----
-
-**Version**: FANTASIA Lite V1.1  
-**Last Updated**: July 2026
-**Funded by** EOSC-OSCARS Fun4Biodiversity
