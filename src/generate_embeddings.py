@@ -4,10 +4,13 @@ generate_embeddings.py
 ----------------------
 
 This script computes protein sequence embeddings for a small FASTA file
-using three pretrained protein language models used by the FANTASIA pipeline:
+using pretrained protein language models used by the FANTASIA pipeline:
 
+  * **ESM-2**: `facebook/esm2_t33_650M_UR50D`
+  * **ProstT5**: `Rostlab/ProstT5`
   * **ProtT5**: `Rostlab/prot_t5_xl_uniref50`
   * **Ankh3‑Large**: `ElnaggarLab/ankh3-large`
+  * **ESM-C**: `EvolutionaryScale/esmc-600m-2024-12`
 
 For each sequence, the script loads each model, tokenizes the sequence,
 runs a forward pass to obtain the per-residue hidden states, and averages
@@ -55,6 +58,7 @@ provide this file to the database‑free FANTASIA lookup script as
 import argparse
 import csv
 import gzip
+import hashlib
 import json
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
@@ -64,10 +68,15 @@ try:
     import h5py  # type: ignore
 except ImportError:
     h5py = None  # type: ignore
-from Bio import SeqIO  # type: ignore
 import numpy as np
 import torch  # type: ignore
-from transformers import AutoModel, AutoTokenizer  # type: ignore
+from transformers import (  # type: ignore
+    AutoModel,
+    AutoTokenizer,
+    EsmModel,
+    T5EncoderModel,
+    T5Tokenizer,
+)
 try:
     from tqdm import tqdm  # type: ignore
 except ImportError:  # pragma: no cover
@@ -100,21 +109,83 @@ import re
 #             associate query embeddings with the corresponding reference
 #             model.
 MODEL_REGISTRY: Dict[str, Dict[str, object]] = {
+    # ESM-2 model. The lookup table refers to this model as ``ESM``.
+    "esm2": {
+        "hf_id": "facebook/esm2_t33_650M_UR50D",
+        "revision": "08e4846e537177426273712802403f7ba8261b6c",
+        "key": "ESM",
+        "loader": "esm2",
+        "tokenizer_use_fast": True,
+    },
+    # ProstT5 model. The lookup table refers to this model as ``Prost-T5``.
+    "prost_t5": {
+        "hf_id": "Rostlab/ProstT5",
+        "revision": "d7d097d5bf9a993ab8f68488b4681d6ca70db9e5",
+        "key": "Prost-T5",
+        "loader": "t5",
+        "tokenizer_use_fast": False,
+        "do_lower_case": False,
+    },
     # ProtT5 model.  The lookup table refers to this model as ``Prot-T5``.
     "prot_t5": {
         "hf_id": "Rostlab/prot_t5_xl_uniref50",
         "revision": "973be27c52ee6474de9c945952a8008aeb2a1a73",
         "key": "Prot-T5",
+        "loader": "t5",
         "tokenizer_use_fast": False,
+        "do_lower_case": False,
     },
     # Ankh3-Large model.  The lookup table key is ``Ankh3-Large``.
     "ankh3": {
         "hf_id": "ElnaggarLab/ankh3-large",
         "revision": "2be091622e8a393f0ef21735070084123c874b6e",
         "key": "Ankh3-Large",
+        "loader": "t5",
         "tokenizer_use_fast": False,
     },
+    # ESM Cambrian 600M. The lookup table refers to this model as ``ESM3c``.
+    "esmc": {
+        "hf_id": "EvolutionaryScale/esmc-600m-2024-12",
+        "revision": "e4d83bc7e10fd55c92e598e545f4a76bf04a6e5c",
+        "serialization": "esmc_600m_2024_12_v0.pth",
+        "weights_sha256": "8ef856e1a237ee3f995442df997a962e70057faadecf38fc0c8561bd3c2f4324",
+        "key": "ESM3c",
+        "loader": "esmc",
+        "model_name": "esmc_600m",
+        "embedding_dim": 1152,
+    },
 }
+
+MODEL_ALIASES = {
+    "esm": "esm2",
+    "esm2": "esm2",
+    "esm-2": "esm2",
+    "prost-t5": "prost_t5",
+    "prost_t5": "prost_t5",
+    "prostt5": "prost_t5",
+    "prot-t5": "prot_t5",
+    "prot_t5": "prot_t5",
+    "prott5": "prot_t5",
+    "ankh3": "ankh3",
+    "ankh3-large": "ankh3",
+    "ankh3_large": "ankh3",
+    "esmc": "esmc",
+    "esm-c": "esmc",
+    "esm_c": "esmc",
+    "esm3c": "esmc",
+}
+
+
+def normalize_model_name(model_name: str) -> str:
+    """Return the canonical Lite model key for a CLI model name or alias."""
+    normalized = model_name.strip().lower()
+    try:
+        return MODEL_ALIASES[normalized]
+    except KeyError as exc:
+        supported = ", ".join(MODEL_REGISTRY)
+        raise ValueError(
+            f"Unknown model {model_name!r}. Supported models: {supported}."
+        ) from exc
 
 
 def parse_fasta(fasta_path: Path) -> Tuple[List[str], List[str]]:
@@ -185,13 +256,43 @@ def parse_fasta(fasta_path: Path) -> Tuple[List[str], List[str]]:
     return ids, seqs
 
 
-RESIDUE_SPACE_MODELS = {"prot_t5"}
-SPECIAL_TOKEN_MODELS = {"prot_t5", "ankh3"}
+RESIDUE_SPACE_MODELS = {"prot_t5", "prost_t5"}
+SPECIAL_TOKEN_MODELS = {"esm2", "prost_t5", "prot_t5", "ankh3"}
 ANKH_MODELS = {"ankh3"}
+ESM2_MODELS = {"esm2"}
+ESMC_MODELS = {"esmc"}
 T5_AMINO_ACID_REMAP = str.maketrans({"U": "X", "Z": "X", "O": "X", "B": "X"})
 DEFAULT_EMBED_BATCH_SIZE = 8
 DEFAULT_MAX_BATCH_RESIDUES = 12000
 DEFAULT_QUEUE_BATCH_SIZE = 100
+
+
+def validate_device(device: torch.device) -> None:
+    """Fail early if the requested PyTorch device cannot allocate tensors."""
+    if device.type != "cuda":
+        return
+    try:
+        if not torch.cuda.is_available():
+            raise RuntimeError("torch.cuda.is_available() is false")
+        _probe = torch.empty((1,), device=device)
+        torch.cuda.synchronize()
+        del _probe
+    except Exception as exc:
+        raise RuntimeError(
+            "Requested --device cuda, but PyTorch could not allocate on CUDA. "
+            "This usually indicates a CUDA/NVML driver or PyTorch wheel issue. "
+            "Rerun with --device cpu to continue without CUDA, or fix the CUDA "
+            "runtime before retrying GPU embedding."
+        ) from exc
+
+
+def sha256_file(path: Path) -> str:
+    """Return the SHA-256 checksum for a local file."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 @dataclass
@@ -236,6 +337,8 @@ def preprocess_sequence(seq: str, model_name: str) -> str:
             # Replace ambiguous amino acids with X
             remapped = re.sub(r"[UZOB]", "X", stripped)
             spaced = " ".join(list(remapped))
+            if model_name == "prost_t5":
+                return f"<AA2fold> {spaced}"
             return spaced
         else:
             # Lowercase sequences (3Di/fold tokens)
@@ -255,17 +358,85 @@ def _pool_hidden_states(
     model_name: str,
 ) -> torch.Tensor:
     """Pool token-level hidden states into one embedding per sequence."""
-    if model_name in ANKH_MODELS:
-        pooled: List[torch.Tensor] = []
-        valid_lengths = attention_mask.sum(dim=1).tolist()
-        for row_idx, valid_length in enumerate(valid_lengths):
-            length = max(int(valid_length) - 2, 1)
-            pooled.append(hidden[row_idx, 1 : 1 + length].mean(dim=0))
-        return torch.stack(pooled, dim=0)
+    if model_name in ESM2_MODELS:
+        attention_mask = attention_mask.clone()
+        attention_mask[:, 0] = 0
+        lengths = attention_mask.sum(dim=1).clamp_min(1).to(torch.long)
+        last_indices = lengths - 1
+        batch_indices = torch.arange(attention_mask.size(0), device=attention_mask.device)
+        attention_mask[batch_indices, last_indices] = 0
 
     weights = attention_mask.unsqueeze(-1).to(hidden.dtype)
     lengths = weights.sum(dim=1).clamp_min(1.0)
     return (hidden * weights).sum(dim=1) / lengths
+
+
+def _compute_esmc_embeddings(
+    sequences: Sequence[str],
+    model: Any,
+    device: torch.device,
+    *,
+    layer_indices: Optional[Sequence[int]] = None,
+    export_all_layers: bool = False,
+) -> Tuple[np.ndarray, Dict[int, np.ndarray]]:
+    """Compute ESM-C embeddings via the EvolutionaryScale SDK."""
+    try:
+        from esm.sdk.api import ESMProtein, LogitsConfig  # type: ignore
+    except ImportError as exc:  # pragma: no cover - depends on optional model
+        raise RuntimeError(
+            "ESM-C embedding requires the EvolutionaryScale 'esm' package and "
+            f"its runtime dependencies. Missing import: {exc}."
+        ) from exc
+
+    default_embeddings: List[np.ndarray] = []
+    pooled_layers: Dict[int, List[np.ndarray]] = {}
+    with torch.inference_mode():
+        for sequence in sequences:
+            protein = ESMProtein(sequence=sequence)
+            protein_tensor = model.encode(protein)
+            logits_output = model.logits(
+                protein_tensor,
+                LogitsConfig(
+                    sequence=True,
+                    return_embeddings=True,
+                    return_hidden_states=True,
+                ),
+            )
+            hidden_states = logits_output.hidden_states
+            if hidden_states is None:
+                if logits_output.embeddings is None:
+                    raise RuntimeError("ESM-C output did not include embeddings.")
+                last_layer = logits_output.embeddings.to(torch.float32)
+                available_layers = {0: last_layer}
+            elif isinstance(hidden_states, torch.Tensor):
+                available_layers = {
+                    idx: hidden_states[idx].to(torch.float32)
+                    for idx in range(hidden_states.shape[0])
+                }
+                last_layer = available_layers[max(available_layers)]
+            else:
+                layer_list = [layer.to(torch.float32) for layer in hidden_states]
+                available_layers = {idx: layer for idx, layer in enumerate(layer_list)}
+                last_layer = layer_list[-1]
+
+            default_embeddings.append(last_layer[0, 1:-1].mean(dim=0).detach().cpu().numpy())
+
+            for layer_idx in resolve_layer_indices(
+                layer_indices,
+                export_all_layers=export_all_layers,
+                available_layers=available_layers,
+            ):
+                layer_tensor = available_layers[layer_idx]
+                pooled = layer_tensor[0, 1:-1].mean(dim=0).detach().cpu().numpy()
+                pooled_layers.setdefault(layer_idx, []).append(pooled)
+
+    return (
+        np.stack(default_embeddings).astype(np.float32, copy=False),
+        {
+            layer_idx: np.stack(layer_values).astype(np.float32, copy=False)
+            for layer_idx, layer_values in pooled_layers.items()
+        },
+    )
 
 
 def _collect_hidden_state_layers(
@@ -313,8 +484,8 @@ def resolve_layer_indices(
 
 def compute_embeddings_batch(
     sequences: Sequence[str],
-    model: AutoModel,
-    tokenizer: AutoTokenizer,
+    model: Any,
+    tokenizer: Any,
     device: torch.device,
     *,
     model_name: str,
@@ -346,6 +517,15 @@ def compute_embeddings_batch(
         The second item optionally contains pooled embeddings for selected
         hidden layers keyed by layer index.
     """
+    if model_name in ESMC_MODELS:
+        return _compute_esmc_embeddings(
+            sequences,
+            model,
+            device,
+            layer_indices=layer_indices,
+            export_all_layers=export_all_layers,
+        )
+
     add_special_tokens = model_name in SPECIAL_TOKEN_MODELS
     inputs = tokenizer(
         list(sequences),
@@ -389,8 +569,8 @@ def compute_embeddings_batch(
 
 def compute_embedding(
     sequence: str,
-    model: AutoModel,
-    tokenizer: AutoTokenizer,
+    model: Any,
+    tokenizer: Any,
     device: torch.device,
     *,
     model_name: str,
@@ -491,7 +671,7 @@ def iter_queue_packages(
 
 def load_model_components(
     model_name: str, device: torch.device
-) -> tuple[AutoTokenizer, AutoModel, int]:
+) -> tuple[Any, Any, int]:
     """Load tokenizer and model for ``model_name`` and move to ``device``."""
     model_info = MODEL_REGISTRY[model_name]
     hf_model_id = model_info["hf_id"]
@@ -499,16 +679,89 @@ def load_model_components(
     print(f"Loading model {model_name} ({hf_model_id})…")
     tokenizer_kwargs = dict(model_info.get("tokenizer_kwargs", {}))
     model_kwargs = dict(model_info.get("model_kwargs", {}))
+    revision = model_info.get("revision")
+    if revision:
+        tokenizer_kwargs.setdefault("revision", revision)
+        model_kwargs.setdefault("revision", revision)
+    loader = str(model_info.get("loader", "auto"))
     tokenizer_use_fast = bool(model_info.get("tokenizer_use_fast", False))
-    tokenizer = AutoTokenizer.from_pretrained(
-        hf_model_id,
-        use_fast=tokenizer_use_fast,
-        revision=revision,
-        **tokenizer_kwargs,
-    )
-    model = AutoModel.from_pretrained(
-        hf_model_id, revision=revision, **model_kwargs
-    )
+
+    if loader == "esmc":
+        try:
+            import esm.pretrained  # type: ignore
+            from esm.models.esmc import ESMC  # type: ignore
+            from huggingface_hub import snapshot_download  # type: ignore
+        except ImportError as exc:  # pragma: no cover - depends on optional model
+            raise RuntimeError(
+                "ESM-C embedding requires the EvolutionaryScale 'esm' package and "
+                f"its runtime dependencies. Missing import: {exc}."
+            ) from exc
+
+        snapshot_path = Path(
+            snapshot_download(repo_id=str(hf_model_id), revision=str(revision))
+        ).resolve()
+        if revision and snapshot_path.name != str(revision):
+            raise RuntimeError(
+                f"Resolved snapshot {snapshot_path.name!r} does not match "
+                f"configured revision {revision!r} for {model_name}."
+            )
+
+        serialization = str(model_info.get("serialization", "esmc_600m_2024_12_v0.pth"))
+        weight_path = snapshot_path / "data" / "weights" / serialization
+        if not weight_path.is_file():
+            raise FileNotFoundError(f"Pinned ESM-C serialization not found: {weight_path}")
+        expected_sha256 = model_info.get("weights_sha256")
+        if expected_sha256:
+            actual_sha256 = sha256_file(weight_path)
+            if actual_sha256 != expected_sha256:
+                raise RuntimeError(
+                    "ESM-C weight checksum mismatch: "
+                    f"expected {expected_sha256}, found {actual_sha256}"
+                )
+
+        original_data_root = esm.pretrained.data_root
+        try:
+            esm.pretrained.data_root = lambda _model: snapshot_path
+            model = ESMC.from_pretrained(str(model_info.get("model_name", "esmc_600m")))
+        finally:
+            esm.pretrained.data_root = original_data_root
+        model = model.to(device).to(torch.float32)
+        model.eval()
+        embedding_dim = model_info.get("embedding_dim")
+        if embedding_dim is None:
+            embedding_dim = infer_embedding_dim(model)
+        return None, model, int(embedding_dim)
+
+    if loader == "esm2":
+        tokenizer = AutoTokenizer.from_pretrained(
+            hf_model_id,
+            use_fast=tokenizer_use_fast,
+            **tokenizer_kwargs,
+        )
+        model = EsmModel.from_pretrained(
+            hf_model_id,
+            output_hidden_states=True,
+            **model_kwargs,
+        )
+    elif loader == "t5":
+        tokenizer_kwargs.setdefault(
+            "do_lower_case", bool(model_info.get("do_lower_case", False))
+        )
+        tokenizer = T5Tokenizer.from_pretrained(hf_model_id, **tokenizer_kwargs)
+        dtype = torch.float16 if device.type == "cuda" else torch.float32
+        model_kwargs.setdefault("torch_dtype", dtype)
+        model = T5EncoderModel.from_pretrained(
+            hf_model_id,
+            output_hidden_states=True,
+            **model_kwargs,
+        )
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(
+            hf_model_id,
+            use_fast=tokenizer_use_fast,
+            **tokenizer_kwargs,
+        )
+        model = AutoModel.from_pretrained(hf_model_id, **model_kwargs)
     model.to(device)
     model.eval()
     embedding_dim = infer_embedding_dim(model)
@@ -526,7 +779,7 @@ def embed_sequences_for_model(
     max_batch_residues: int,
     layer_indices: Optional[Sequence[int]],
     export_all_layers: bool,
-    model_components: Optional[Tuple[AutoTokenizer, AutoModel, int]] = None,
+    model_components: Optional[Tuple[Any, Any, int]] = None,
 ) -> EmbeddingResult:
     """Compute embeddings for all sequences using a given model.
 
@@ -542,7 +795,7 @@ def embed_sequences_for_model(
         Sequence identifiers that should be skipped (failed previously).
     fasta_path : Path
         The FASTA file currently being processed (for reporting).
-    model_components : Optional[Tuple[AutoTokenizer, AutoModel, int]]
+    model_components : Optional[Tuple[Any, Any, int]]
         Preloaded tokenizer/model tuple.  When provided the caller retains ownership
         of the model and it will be reused across chunks.
 
@@ -822,7 +1075,7 @@ def process_chunk(
     device: torch.device,
     *,
     failure_report: Optional[Path],
-    model_cache: Dict[str, Tuple[AutoTokenizer, AutoModel, int]],
+    model_cache: Dict[str, Tuple[Any, Any, int]],
     queue_batch_size: int,
     max_sequence_length: int,
     embed_batch_size: int,
@@ -941,9 +1194,12 @@ def main() -> None:
     parser.add_argument(
         "--models",
         nargs="+",
-        choices=list(MODEL_REGISTRY.keys()),
         default=list(MODEL_REGISTRY.keys()),
-        help="Subset of models to run (default: all)",
+        help=(
+            "Subset of models to run (default: all). Canonical names: "
+            "esm2, prost_t5, prot_t5, ankh3, esmc. Full FANTASIA aliases "
+            "such as ESM, Prost-T5, Prot-T5, Ankh3-Large, and ESM3c are accepted."
+        ),
     )
     parser.add_argument(
         "--device",
@@ -991,7 +1247,7 @@ def main() -> None:
         default=(),
         help=(
             "Optional per-model forward batch overrides in the form "
-            "'prot_t5=8 ankh3=4'."
+            "'esm2=1 prost_t5=1 prot_t5=4 ankh3=4 esmc=1'."
         ),
     )
     parser.add_argument(
@@ -1067,6 +1323,10 @@ def main() -> None:
 
     device = torch.device(args.device)
     print(f"Using device: {device}")
+    validate_device(device)
+    args.models = list(
+        dict.fromkeys(normalize_model_name(model_name) for model_name in args.models)
+    )
 
     model_batch_sizes: Dict[str, int] = {}
     for item in args.model_batch_sizes:
@@ -1075,11 +1335,7 @@ def main() -> None:
                 f"Invalid --model-batch-sizes entry {item!r}; expected model=value."
             )
         model_name, raw_value = item.split("=", 1)
-        model_name = model_name.strip()
-        if model_name not in MODEL_REGISTRY:
-            raise ValueError(
-                f"Unknown model in --model-batch-sizes: {model_name!r}."
-            )
+        model_name = normalize_model_name(model_name)
         batch_value = int(raw_value)
         if batch_value <= 0:
             raise ValueError("Per-model batch sizes must be positive integers.")
@@ -1096,7 +1352,7 @@ def main() -> None:
             "to preserve upstream batching semantics."
         )
 
-    model_cache: Dict[str, Tuple[AutoTokenizer, AutoModel, int]] = {}
+    model_cache: Dict[str, Tuple[Any, Any, int]] = {}
     for model_name in args.models:
         model_cache[model_name] = load_model_components(model_name, device)
 

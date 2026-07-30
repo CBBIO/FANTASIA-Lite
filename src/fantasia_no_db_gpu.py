@@ -271,14 +271,19 @@ class EmbeddingLookUpLocalGPU:
                 index_by_model[model_key] = np.asarray(arr, dtype=np.float32)
 
         entries: List[Dict[str, Any]] = []
-        for idx, (accession, sequence) in enumerate(zip(accessions, sequences, strict=False)):
-            models = {model_key: arr[idx] for model_key, arr in index_by_model.items()}
-            if models:
+        for model_key, arr in index_by_model.items():
+            model_accessions = npz.get(f"{model_key}_accessions", accessions)
+            model_sequences = npz.get(f"{model_key}_sequences", sequences)
+            for idx, (accession, sequence) in enumerate(
+                zip(model_accessions, model_sequences, strict=False)
+            ):
+                if idx >= len(arr):
+                    break
                 entries.append(
                     {
                         "query_accession": extract_accession_id(str(accession)),
                         "query_sequence": str(sequence),
-                        "models": models,
+                        "models": {model_key: arr[idx]},
                     }
                 )
         return entries
