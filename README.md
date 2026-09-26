@@ -594,8 +594,17 @@ query/model/GO/category combination.
 
 ## Citation
 
-Please cite this repository, the version-specific Zenodo lookup record used in
-the analysis, and the relevant FANTASIA publications:
+If you use **FANTASIA-Lite** in your research, please cite the tool paper:
+
+Pérez-Canales, F. M., Domínguez-Rodríguez, À., Carbonetto, B., Fernández, R., Cases, I., & Rojas, A. M. (2026).
+*FANTASIA suite: a reproducible and configurable framework for embedding-based functional annotation of proteins.*
+NAR Genomics and Bioinformatics, 8(3), lqag106.
+[DOI: 10.1093/nargab/lqag106](https://doi.org/10.1093/nargab/lqag106)
+
+Please also cite this repository and the version-specific Zenodo lookup record
+used in the analysis.
+
+### Related publications
 
 - [Performance of protein language models in model organisms](https://doi.org/10.1093/nargab/lqae078)
 - [Application of FANTASIA to functional annotation of dark proteomes](https://doi.org/10.1038/s42003-025-08651-2)

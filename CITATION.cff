@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 title: "FANTASIA Lite V1"
-message: "If you use this repository, please cite the software repository and the associated lookup bundle."
+message: "If you use FANTASIA-Lite, please cite the paper in preferred-citation, the software repository, and the associated lookup bundle."
 type: software
 version: "V1"
 doi: "10.5281/zenodo.19742926"
@@ -21,3 +21,26 @@ authors:
     given-names: "Ana"
   - family-names: "Dominguez"
     given-names: "Alex"
+preferred-citation:
+  type: article
+  title: "FANTASIA suite: a reproducible and configurable framework for embedding-based functional annotation of proteins"
+  authors:
+    - family-names: "Pérez-Canales"
+      given-names: "Francisco M"
+    - family-names: "Domínguez-Rodríguez"
+      given-names: "Àlex"
+    - family-names: "Carbonetto"
+      given-names: "Belén"
+    - family-names: "Fernández"
+      given-names: "Rosa"
+    - family-names: "Cases"
+      given-names: "Ildefonso"
+    - family-names: "Rojas"
+      given-names: "Ana M"
+  journal: "NAR Genomics and Bioinformatics"
+  year: 2026
+  volume: "8"
+  issue: "3"
+  start: "lqag106"
+  doi: "10.1093/nargab/lqag106"
+  date-published: "2026-09-11"
