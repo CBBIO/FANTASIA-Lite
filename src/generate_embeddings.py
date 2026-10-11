@@ -4,10 +4,13 @@ generate_embeddings.py
 ----------------------
 
 This script computes protein sequence embeddings for a small FASTA file
-using three pretrained protein language models used by the FANTASIA pipeline:
+using pretrained protein language models used by the FANTASIA pipeline:
 
+  * **ESM-2**: `facebook/esm2_t33_650M_UR50D`
+  * **ProstT5**: `Rostlab/ProstT5`
   * **ProtT5**: `Rostlab/prot_t5_xl_uniref50`
   * **Ankh3‑Large**: `ElnaggarLab/ankh3-large`
+  * **ESM-C**: `EvolutionaryScale/esmc-600m-2024-12`
 
 For each sequence, the script loads each model, tokenizes the sequence,
 runs a forward pass to obtain the per-residue hidden states, and averages
@@ -55,8 +58,9 @@ provide this file to the database‑free FANTASIA lookup script as
 import argparse
 import csv
 import gzip
+import hashlib
 import json
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -64,10 +68,15 @@ try:
     import h5py  # type: ignore
 except ImportError:
     h5py = None  # type: ignore
-from Bio import SeqIO  # type: ignore
 import numpy as np
 import torch  # type: ignore
-from transformers import AutoModel, AutoTokenizer  # type: ignore
+from transformers import (  # type: ignore
+    AutoModel,
+    AutoTokenizer,
+    EsmModel,
+    T5EncoderModel,
+    T5Tokenizer,
+)
 try:
     from tqdm import tqdm  # type: ignore
 except ImportError:  # pragma: no cover
@@ -100,19 +109,83 @@ import re
 #             associate query embeddings with the corresponding reference
 #             model.
 MODEL_REGISTRY: Dict[str, Dict[str, object]] = {
+    # ESM-2 model. The lookup table refers to this model as ``ESM``.
+    "esm2": {
+        "hf_id": "facebook/esm2_t33_650M_UR50D",
+        "revision": "08e4846e537177426273712802403f7ba8261b6c",
+        "key": "ESM",
+        "loader": "esm2",
+        "tokenizer_use_fast": True,
+    },
+    # ProstT5 model. The lookup table refers to this model as ``Prost-T5``.
+    "prost_t5": {
+        "hf_id": "Rostlab/ProstT5",
+        "revision": "d7d097d5bf9a993ab8f68488b4681d6ca70db9e5",
+        "key": "Prost-T5",
+        "loader": "t5",
+        "tokenizer_use_fast": False,
+        "do_lower_case": False,
+    },
     # ProtT5 model.  The lookup table refers to this model as ``Prot-T5``.
     "prot_t5": {
         "hf_id": "Rostlab/prot_t5_xl_uniref50",
+        "revision": "973be27c52ee6474de9c945952a8008aeb2a1a73",
         "key": "Prot-T5",
+        "loader": "t5",
         "tokenizer_use_fast": False,
+        "do_lower_case": False,
     },
     # Ankh3-Large model.  The lookup table key is ``Ankh3-Large``.
     "ankh3": {
         "hf_id": "ElnaggarLab/ankh3-large",
+        "revision": "2be091622e8a393f0ef21735070084123c874b6e",
         "key": "Ankh3-Large",
+        "loader": "t5",
         "tokenizer_use_fast": False,
     },
+    # ESM Cambrian 600M. The lookup table refers to this model as ``ESM3c``.
+    "esmc": {
+        "hf_id": "EvolutionaryScale/esmc-600m-2024-12",
+        "revision": "e4d83bc7e10fd55c92e598e545f4a76bf04a6e5c",
+        "serialization": "esmc_600m_2024_12_v0.pth",
+        "weights_sha256": "8ef856e1a237ee3f995442df997a962e70057faadecf38fc0c8561bd3c2f4324",
+        "key": "ESM3c",
+        "loader": "esmc",
+        "model_name": "esmc_600m",
+        "embedding_dim": 1152,
+    },
 }
+
+MODEL_ALIASES = {
+    "esm": "esm2",
+    "esm2": "esm2",
+    "esm-2": "esm2",
+    "prost-t5": "prost_t5",
+    "prost_t5": "prost_t5",
+    "prostt5": "prost_t5",
+    "prot-t5": "prot_t5",
+    "prot_t5": "prot_t5",
+    "prott5": "prot_t5",
+    "ankh3": "ankh3",
+    "ankh3-large": "ankh3",
+    "ankh3_large": "ankh3",
+    "esmc": "esmc",
+    "esm-c": "esmc",
+    "esm_c": "esmc",
+    "esm3c": "esmc",
+}
+
+
+def normalize_model_name(model_name: str) -> str:
+    """Return the canonical Lite model key for a CLI model name or alias."""
+    normalized = model_name.strip().lower()
+    try:
+        return MODEL_ALIASES[normalized]
+    except KeyError as exc:
+        supported = ", ".join(MODEL_REGISTRY)
+        raise ValueError(
+            f"Unknown model {model_name!r}. Supported models: {supported}."
+        ) from exc
 
 
 def parse_fasta(fasta_path: Path) -> Tuple[List[str], List[str]]:
@@ -183,10 +256,43 @@ def parse_fasta(fasta_path: Path) -> Tuple[List[str], List[str]]:
     return ids, seqs
 
 
-RESIDUE_SPACE_MODELS = {"prot_t5"}
-SPECIAL_TOKEN_MODELS = {"prot_t5", "ankh3"}
+RESIDUE_SPACE_MODELS = {"prot_t5", "prost_t5"}
+SPECIAL_TOKEN_MODELS = {"esm2", "prost_t5", "prot_t5", "ankh3"}
 ANKH_MODELS = {"ankh3"}
+ESM2_MODELS = {"esm2"}
+ESMC_MODELS = {"esmc"}
 T5_AMINO_ACID_REMAP = str.maketrans({"U": "X", "Z": "X", "O": "X", "B": "X"})
+DEFAULT_EMBED_BATCH_SIZE = 8
+DEFAULT_MAX_BATCH_RESIDUES = 12000
+DEFAULT_QUEUE_BATCH_SIZE = 100
+
+
+def validate_device(device: torch.device) -> None:
+    """Fail early if the requested PyTorch device cannot allocate tensors."""
+    if device.type != "cuda":
+        return
+    try:
+        if not torch.cuda.is_available():
+            raise RuntimeError("torch.cuda.is_available() is false")
+        _probe = torch.empty((1,), device=device)
+        torch.cuda.synchronize()
+        del _probe
+    except Exception as exc:
+        raise RuntimeError(
+            "Requested --device cuda, but PyTorch could not allocate on CUDA. "
+            "This usually indicates a CUDA/NVML driver or PyTorch wheel issue. "
+            "Rerun with --device cpu to continue without CUDA, or fix the CUDA "
+            "runtime before retrying GPU embedding."
+        ) from exc
+
+
+def sha256_file(path: Path) -> str:
+    """Return the SHA-256 checksum for a local file."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 @dataclass
@@ -206,6 +312,19 @@ class EmbeddingResult:
     failures: List[EmbeddingFailure]
     failed_ids: Set[str]
     embedding_dim: int
+    layer_embeddings: Dict[int, Dict[str, np.ndarray]] = field(default_factory=dict)
+
+
+def normalize_sequence_for_embedding(
+    sequence: str,
+    *,
+    max_sequence_length: int,
+) -> str:
+    """Apply upstream-compatible pre-embedding length filtering."""
+    normalized = sequence.replace(" ", "").replace("\n", "").upper()
+    if max_sequence_length > 0:
+        return normalized[:max_sequence_length]
+    return normalized
 
 
 def preprocess_sequence(seq: str, model_name: str) -> str:
@@ -218,6 +337,8 @@ def preprocess_sequence(seq: str, model_name: str) -> str:
             # Replace ambiguous amino acids with X
             remapped = re.sub(r"[UZOB]", "X", stripped)
             spaced = " ".join(list(remapped))
+            if model_name == "prost_t5":
+                return f"<AA2fold> {spaced}"
             return spaced
         else:
             # Lowercase sequences (3Di/fold tokens)
@@ -230,24 +351,158 @@ def preprocess_sequence(seq: str, model_name: str) -> str:
     return stripped.upper()
 
 
-def compute_embedding(
-    sequence: str,
+def _pool_hidden_states(
+    hidden: torch.Tensor,
+    attention_mask: torch.Tensor,
+    *,
+    model_name: str,
+) -> torch.Tensor:
+    """Pool token-level hidden states into one embedding per sequence."""
+    if model_name in ESM2_MODELS:
+        attention_mask = attention_mask.clone()
+        attention_mask[:, 0] = 0
+        lengths = attention_mask.sum(dim=1).clamp_min(1).to(torch.long)
+        last_indices = lengths - 1
+        batch_indices = torch.arange(attention_mask.size(0), device=attention_mask.device)
+        attention_mask[batch_indices, last_indices] = 0
+
+    weights = attention_mask.unsqueeze(-1).to(hidden.dtype)
+    lengths = weights.sum(dim=1).clamp_min(1.0)
+    return (hidden * weights).sum(dim=1) / lengths
+
+
+def _compute_esmc_embeddings(
+    sequences: Sequence[str],
+    model: Any,
+    device: torch.device,
+    *,
+    layer_indices: Optional[Sequence[int]] = None,
+    export_all_layers: bool = False,
+) -> Tuple[np.ndarray, Dict[int, np.ndarray]]:
+    """Compute ESM-C embeddings via the EvolutionaryScale SDK."""
+    try:
+        from esm.sdk.api import ESMProtein, LogitsConfig  # type: ignore
+    except ImportError as exc:  # pragma: no cover - depends on optional model
+        raise RuntimeError(
+            "ESM-C embedding requires the EvolutionaryScale 'esm' package and "
+            f"its runtime dependencies. Missing import: {exc}."
+        ) from exc
+
+    default_embeddings: List[np.ndarray] = []
+    pooled_layers: Dict[int, List[np.ndarray]] = {}
+    with torch.inference_mode():
+        for sequence in sequences:
+            protein = ESMProtein(sequence=sequence)
+            protein_tensor = model.encode(protein)
+            logits_output = model.logits(
+                protein_tensor,
+                LogitsConfig(
+                    sequence=True,
+                    return_embeddings=True,
+                    return_hidden_states=True,
+                ),
+            )
+            hidden_states = logits_output.hidden_states
+            if hidden_states is None:
+                if logits_output.embeddings is None:
+                    raise RuntimeError("ESM-C output did not include embeddings.")
+                last_layer = logits_output.embeddings.to(torch.float32)
+                available_layers = {0: last_layer}
+            elif isinstance(hidden_states, torch.Tensor):
+                available_layers = {
+                    idx: hidden_states[idx].to(torch.float32)
+                    for idx in range(hidden_states.shape[0])
+                }
+                last_layer = available_layers[max(available_layers)]
+            else:
+                layer_list = [layer.to(torch.float32) for layer in hidden_states]
+                available_layers = {idx: layer for idx, layer in enumerate(layer_list)}
+                last_layer = layer_list[-1]
+
+            default_embeddings.append(last_layer[0, 1:-1].mean(dim=0).detach().cpu().numpy())
+
+            for layer_idx in resolve_layer_indices(
+                layer_indices,
+                export_all_layers=export_all_layers,
+                available_layers=available_layers,
+            ):
+                layer_tensor = available_layers[layer_idx]
+                pooled = layer_tensor[0, 1:-1].mean(dim=0).detach().cpu().numpy()
+                pooled_layers.setdefault(layer_idx, []).append(pooled)
+
+    return (
+        np.stack(default_embeddings).astype(np.float32, copy=False),
+        {
+            layer_idx: np.stack(layer_values).astype(np.float32, copy=False)
+            for layer_idx, layer_values in pooled_layers.items()
+        },
+    )
+
+
+def _collect_hidden_state_layers(
+    outputs: Any,
     model: AutoModel,
-    tokenizer: AutoTokenizer,
+) -> Tuple[torch.Tensor, Dict[int, torch.Tensor]]:
+    """Return the last hidden state plus a normalized layer-index mapping."""
+    if hasattr(outputs, "last_hidden_state"):
+        hidden = outputs.last_hidden_state  # type: ignore[attr-defined]
+    elif isinstance(outputs, tuple):
+        hidden = outputs[0]
+    else:
+        raise RuntimeError("Unknown output structure from model")
+
+    hidden_states = getattr(outputs, "hidden_states", None)
+    if hidden_states is None:
+        return hidden, {}
+
+    hidden_state_list = list(hidden_states)
+
+    layer_map: Dict[int, torch.Tensor] = {}
+    for layer_idx, layer_hidden in enumerate(hidden_state_list):
+        layer_map[layer_idx] = layer_hidden
+    return hidden, layer_map
+
+
+def resolve_layer_indices(
+    requested_layers: Optional[Sequence[int]],
+    *,
+    export_all_layers: bool,
+    available_layers: Dict[int, torch.Tensor],
+) -> List[int]:
+    """Resolve the final set of layer indices to export."""
+    if export_all_layers:
+        return sorted(available_layers.keys())
+    if not requested_layers:
+        return []
+
+    missing = [layer_idx for layer_idx in requested_layers if layer_idx not in available_layers]
+    if missing:
+        preview = ", ".join(str(layer) for layer in missing[:10])
+        raise ValueError(f"Requested layer(s) not available from model output: {preview}")
+    return sorted(dict.fromkeys(int(layer_idx) for layer_idx in requested_layers))
+
+
+def compute_embeddings_batch(
+    sequences: Sequence[str],
+    model: Any,
+    tokenizer: Any,
     device: torch.device,
     *,
     model_name: str,
-) -> np.ndarray:
-    """Compute the mean pooled embedding for a single sequence.
+    layer_indices: Optional[Sequence[int]] = None,
+    export_all_layers: bool = False,
+) -> Tuple[np.ndarray, Dict[int, np.ndarray]]:
+    """Compute mean pooled embeddings for a batch of sequences.
 
     This function tokenizes the input amino acid sequence, runs a forward
-    pass through the transformer model, and returns the mean of the last
-    hidden state across sequence positions.
+    pass through the transformer model, and returns one pooled vector per
+    sequence. Sequences may be padded within the batch; pooling respects
+    the attention mask so that padding does not affect the output.
 
     Parameters
     ----------
-    sequence : str
-        Amino acid sequence (upper‑case).
+    sequences : Sequence[str]
+        Prepared model inputs.
     model : AutoModel
         A pretrained transformer model.
     tokenizer : AutoTokenizer
@@ -257,42 +512,82 @@ def compute_embedding(
 
     Returns
     -------
-    np.ndarray
-        A 1‑D array representing the per‑protein embedding.
+    Tuple[np.ndarray, Dict[int, np.ndarray]]
+        The first item is the default pooled last-layer embedding matrix.
+        The second item optionally contains pooled embeddings for selected
+        hidden layers keyed by layer index.
     """
-    # Tokenize; allow model-specific special tokens while keeping raw lengths
+    if model_name in ESMC_MODELS:
+        return _compute_esmc_embeddings(
+            sequences,
+            model,
+            device,
+            layer_indices=layer_indices,
+            export_all_layers=export_all_layers,
+        )
+
     add_special_tokens = model_name in SPECIAL_TOKEN_MODELS
     inputs = tokenizer(
-        sequence,
+        list(sequences),
         return_tensors="pt",
         add_special_tokens=add_special_tokens,
         truncation=False,
+        padding=True,
     )
-    
     inputs = {key: val.to(device) for key, val in inputs.items()}
-    with torch.no_grad():
+    with torch.inference_mode():
         if getattr(model.config, "is_encoder_decoder", False) and hasattr(model, "encoder"):
             encoder = model.encoder  # type: ignore[attr-defined]
             outputs = encoder(**inputs, output_hidden_states=True)  # type: ignore[arg-type]
         else:
             outputs = model(**inputs, output_hidden_states=True)
-        # Some models return a tuple of (last_hidden_state, pooler_output, ...)
-        # We take the last hidden state: shape (1, seq_len, hidden_size)
-        if hasattr(outputs, "last_hidden_state"):
-            hidden = outputs.last_hidden_state  # type: ignore
-        elif isinstance(outputs, tuple):
-            hidden = outputs[0]
-        else:
-            raise RuntimeError("Unknown output structure from model")
-    if model_name in ANKH_MODELS and "attention_mask" in inputs:
-        attention_mask = inputs["attention_mask"]
-        valid_lengths = attention_mask.sum(dim=1)
-        length = int(valid_lengths.item()) - 2  # drop [NLU] and </s>
-        length = max(length, 1)
-        embedding = hidden[:, 1 : 1 + length].mean(dim=1).squeeze(0).cpu().numpy()
-    else:
-        embedding = hidden.mean(dim=1).squeeze(0).cpu().numpy()
-    return embedding
+        hidden, available_layers = _collect_hidden_state_layers(outputs, model)
+    attention_mask = inputs.get("attention_mask")
+    if attention_mask is None:
+        attention_mask = torch.ones(hidden.shape[:2], device=hidden.device, dtype=torch.long)
+    embeddings = _pool_hidden_states(hidden, attention_mask, model_name=model_name)
+
+    pooled_layers: Dict[int, np.ndarray] = {}
+    selected_layers = resolve_layer_indices(
+        layer_indices,
+        export_all_layers=export_all_layers,
+        available_layers=available_layers,
+    )
+    for layer_idx in selected_layers:
+        pooled_layers[layer_idx] = (
+            _pool_hidden_states(
+                available_layers[layer_idx],
+                attention_mask,
+                model_name=model_name,
+            )
+            .detach()
+            .cpu()
+            .numpy()
+        )
+    return embeddings.detach().cpu().numpy(), pooled_layers
+
+
+def compute_embedding(
+    sequence: str,
+    model: Any,
+    tokenizer: Any,
+    device: torch.device,
+    *,
+    model_name: str,
+    layer_indices: Optional[Sequence[int]] = None,
+    export_all_layers: bool = False,
+) -> np.ndarray:
+    """Backward-compatible single-sequence wrapper around batch inference."""
+    embedding, _layer_embeddings = compute_embeddings_batch(
+        [sequence],
+        model,
+        tokenizer,
+        device,
+        model_name=model_name,
+        layer_indices=layer_indices,
+        export_all_layers=export_all_layers,
+    )
+    return embedding[0]
 
 
 def classify_embedding_error(exc: Exception) -> Optional[str]:
@@ -329,22 +624,144 @@ def infer_embedding_dim(model: AutoModel) -> int:
     raise RuntimeError("Could not determine embedding dimensionality for model.")
 
 
+def iter_embedding_batches(
+    records: Sequence[Tuple[str, str, str]],
+    *,
+    max_batch_size: int,
+    max_batch_residues: int,
+) -> Iterable[List[Tuple[str, str, str]]]:
+    """Yield batches of similar-length prepared sequences."""
+    if max_batch_size <= 0:
+        raise ValueError("max_batch_size must be positive.")
+    if max_batch_residues <= 0:
+        raise ValueError("max_batch_residues must be positive.")
+
+    sorted_records = sorted(records, key=lambda item: len(item[2]))
+    batch: List[Tuple[str, str, str]] = []
+    batch_residue_budget = 0
+
+    for record in sorted_records:
+        prepared_len = max(len(record[2].split()), 1)
+        projected_budget = max(batch_residue_budget, prepared_len) * (len(batch) + 1)
+        if batch and (
+            len(batch) >= max_batch_size or projected_budget > max_batch_residues
+        ):
+            yield batch
+            batch = []
+            batch_residue_budget = 0
+
+        batch.append(record)
+        batch_residue_budget = max(batch_residue_budget, prepared_len)
+
+    if batch:
+        yield batch
+
+
+def iter_queue_packages(
+    records: Sequence[Tuple[str, str]],
+    *,
+    queue_batch_size: int,
+) -> Iterable[List[Tuple[str, str]]]:
+    """Yield upstream-style queue packages before model forward batching."""
+    if queue_batch_size <= 0:
+        raise ValueError("queue_batch_size must be positive.")
+    for idx in range(0, len(records), queue_batch_size):
+        yield list(records[idx : idx + queue_batch_size])
+
+
 def load_model_components(
     model_name: str, device: torch.device
-) -> tuple[AutoTokenizer, AutoModel, int]:
+) -> tuple[Any, Any, int]:
     """Load tokenizer and model for ``model_name`` and move to ``device``."""
     model_info = MODEL_REGISTRY[model_name]
     hf_model_id = model_info["hf_id"]
+    revision = model_info["revision"]
     print(f"Loading model {model_name} ({hf_model_id})…")
     tokenizer_kwargs = dict(model_info.get("tokenizer_kwargs", {}))
     model_kwargs = dict(model_info.get("model_kwargs", {}))
+    revision = model_info.get("revision")
+    if revision:
+        tokenizer_kwargs.setdefault("revision", revision)
+        model_kwargs.setdefault("revision", revision)
+    loader = str(model_info.get("loader", "auto"))
     tokenizer_use_fast = bool(model_info.get("tokenizer_use_fast", False))
-    tokenizer = AutoTokenizer.from_pretrained(
-        hf_model_id,
-        use_fast=tokenizer_use_fast,
-        **tokenizer_kwargs,
-    )
-    model = AutoModel.from_pretrained(hf_model_id, **model_kwargs)
+
+    if loader == "esmc":
+        try:
+            import esm.pretrained  # type: ignore
+            from esm.models.esmc import ESMC  # type: ignore
+            from huggingface_hub import snapshot_download  # type: ignore
+        except ImportError as exc:  # pragma: no cover - depends on optional model
+            raise RuntimeError(
+                "ESM-C embedding requires the EvolutionaryScale 'esm' package and "
+                f"its runtime dependencies. Missing import: {exc}."
+            ) from exc
+
+        snapshot_path = Path(
+            snapshot_download(repo_id=str(hf_model_id), revision=str(revision))
+        ).resolve()
+        if revision and snapshot_path.name != str(revision):
+            raise RuntimeError(
+                f"Resolved snapshot {snapshot_path.name!r} does not match "
+                f"configured revision {revision!r} for {model_name}."
+            )
+
+        serialization = str(model_info.get("serialization", "esmc_600m_2024_12_v0.pth"))
+        weight_path = snapshot_path / "data" / "weights" / serialization
+        if not weight_path.is_file():
+            raise FileNotFoundError(f"Pinned ESM-C serialization not found: {weight_path}")
+        expected_sha256 = model_info.get("weights_sha256")
+        if expected_sha256:
+            actual_sha256 = sha256_file(weight_path)
+            if actual_sha256 != expected_sha256:
+                raise RuntimeError(
+                    "ESM-C weight checksum mismatch: "
+                    f"expected {expected_sha256}, found {actual_sha256}"
+                )
+
+        original_data_root = esm.pretrained.data_root
+        try:
+            esm.pretrained.data_root = lambda _model: snapshot_path
+            model = ESMC.from_pretrained(str(model_info.get("model_name", "esmc_600m")))
+        finally:
+            esm.pretrained.data_root = original_data_root
+        model = model.to(device).to(torch.float32)
+        model.eval()
+        embedding_dim = model_info.get("embedding_dim")
+        if embedding_dim is None:
+            embedding_dim = infer_embedding_dim(model)
+        return None, model, int(embedding_dim)
+
+    if loader == "esm2":
+        tokenizer = AutoTokenizer.from_pretrained(
+            hf_model_id,
+            use_fast=tokenizer_use_fast,
+            **tokenizer_kwargs,
+        )
+        model = EsmModel.from_pretrained(
+            hf_model_id,
+            output_hidden_states=True,
+            **model_kwargs,
+        )
+    elif loader == "t5":
+        tokenizer_kwargs.setdefault(
+            "do_lower_case", bool(model_info.get("do_lower_case", False))
+        )
+        tokenizer = T5Tokenizer.from_pretrained(hf_model_id, **tokenizer_kwargs)
+        dtype = torch.float16 if device.type == "cuda" else torch.float32
+        model_kwargs.setdefault("torch_dtype", dtype)
+        model = T5EncoderModel.from_pretrained(
+            hf_model_id,
+            output_hidden_states=True,
+            **model_kwargs,
+        )
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(
+            hf_model_id,
+            use_fast=tokenizer_use_fast,
+            **tokenizer_kwargs,
+        )
+        model = AutoModel.from_pretrained(hf_model_id, **model_kwargs)
     model.to(device)
     model.eval()
     embedding_dim = infer_embedding_dim(model)
@@ -358,7 +775,11 @@ def embed_sequences_for_model(
     *,
     skip_ids: Set[str],
     fasta_path: Path,
-    model_components: Optional[Tuple[AutoTokenizer, AutoModel, int]] = None,
+    embed_batch_size: int,
+    max_batch_residues: int,
+    layer_indices: Optional[Sequence[int]],
+    export_all_layers: bool,
+    model_components: Optional[Tuple[Any, Any, int]] = None,
 ) -> EmbeddingResult:
     """Compute embeddings for all sequences using a given model.
 
@@ -374,7 +795,7 @@ def embed_sequences_for_model(
         Sequence identifiers that should be skipped (failed previously).
     fasta_path : Path
         The FASTA file currently being processed (for reporting).
-    model_components : Optional[Tuple[AutoTokenizer, AutoModel, int]]
+    model_components : Optional[Tuple[Any, Any, int]]
         Preloaded tokenizer/model tuple.  When provided the caller retains ownership
         of the model and it will be reused across chunks.
 
@@ -391,57 +812,101 @@ def embed_sequences_for_model(
         tokenizer, model, embedding_dim = model_components
 
     embeddings: Dict[str, np.ndarray] = {}
+    layer_embeddings: Dict[int, Dict[str, np.ndarray]] = {}
     failures: List[EmbeddingFailure] = []
     newly_failed: Set[str] = set()
 
+    pending_records = [
+        (seq_id, raw_sequence, preprocess_sequence(raw_sequence, model_name))
+        for seq_id, raw_sequence in records
+        if seq_id not in skip_ids
+    ]
+
     progress = tqdm(
-        records,
+        total=len(pending_records),
         desc=f"{model_name} embeddings",
         unit="seq",
-        total=len(records),
         leave=False,
     )
-    for seq_id, raw_sequence in progress:
-        if seq_id in skip_ids:
-            continue
-        prepared = preprocess_sequence(raw_sequence, model_name)
+
+    def handle_single_failure(seq_id: str, raw_sequence: str, exc: Exception) -> None:
+        category = classify_embedding_error(exc)
+        if category is None:
+            raise exc
+        error_type = exc.__class__.__name__
+        message = str(exc)
+        print(
+            f"  Skipping sequence {seq_id} for model {model_name}: {category} ({message})"
+        )
+        failures.append(
+            EmbeddingFailure(
+                sequence_id=seq_id,
+                model_name=model_name,
+                error_type=error_type,
+                error_category=category,
+                error_message=message,
+                sequence_length=len(raw_sequence),
+                fasta_path=str(fasta_path),
+            )
+        )
+        newly_failed.add(seq_id)
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
+    for batch in iter_embedding_batches(
+        pending_records,
+        max_batch_size=embed_batch_size,
+        max_batch_residues=max_batch_residues,
+    ):
+        batch_ids = [seq_id for seq_id, _raw_sequence, _prepared in batch]
+        batch_raw_sequences = [raw_sequence for _seq_id, raw_sequence, _prepared in batch]
+        batch_prepared = [prepared for _seq_id, _raw_sequence, prepared in batch]
         try:
-            embedding = compute_embedding(
-                prepared,
+            batch_embeddings, batch_layer_embeddings = compute_embeddings_batch(
+                batch_prepared,
                 model,
                 tokenizer,
                 device,
                 model_name=model_name,
+                layer_indices=layer_indices,
+                export_all_layers=export_all_layers,
             )
-            embeddings[seq_id] = embedding
-        except Exception as exc:  # pylint: disable=broad-except
-            category = classify_embedding_error(exc)
-            if category is None:
-                raise
-            error_type = exc.__class__.__name__
-            message = str(exc)
-            print(
-                f"  Skipping sequence {seq_id} for model {model_name}: {category} ({message})"
-            )
-            failures.append(
-                EmbeddingFailure(
-                    sequence_id=seq_id,
-                    model_name=model_name,
-                    error_type=error_type,
-                    error_category=category,
-                    error_message=message,
-                    sequence_length=len(raw_sequence),
-                    fasta_path=str(fasta_path),
-                )
-            )
-            newly_failed.add(seq_id)
+            for seq_id, embedding in zip(batch_ids, batch_embeddings, strict=False):
+                embeddings[seq_id] = embedding
+            for layer_idx, layer_matrix in batch_layer_embeddings.items():
+                layer_store = layer_embeddings.setdefault(layer_idx, {})
+                for seq_id, embedding in zip(batch_ids, layer_matrix, strict=False):
+                    layer_store[seq_id] = embedding
+            progress.update(len(batch))
+            continue
+        except Exception:  # pylint: disable=broad-except
             if device.type == "cuda":
                 torch.cuda.empty_cache()
+            for seq_id, raw_sequence, prepared in batch:
+                try:
+                    single_embedding, single_layer_embeddings = compute_embeddings_batch(
+                        [prepared],
+                        model,
+                        tokenizer,
+                        device,
+                        model_name=model_name,
+                        layer_indices=layer_indices,
+                        export_all_layers=export_all_layers,
+                    )
+                    embeddings[seq_id] = single_embedding[0]
+                    for layer_idx, layer_matrix in single_layer_embeddings.items():
+                        layer_store = layer_embeddings.setdefault(layer_idx, {})
+                        layer_store[seq_id] = layer_matrix[0]
+                except Exception as exc:  # pylint: disable=broad-except
+                    handle_single_failure(seq_id, raw_sequence, exc)
+                finally:
+                    progress.update(1)
 
     progress.close()
 
     result = EmbeddingResult(
         embeddings=embeddings,
+        layer_embeddings=layer_embeddings,
         failures=failures,
         failed_ids=newly_failed,
         embedding_dim=embedding_dim,
@@ -493,10 +958,32 @@ def stack_embeddings_for_model(
     return stacked
 
 
+def stack_layer_embeddings_for_model(
+    model_name: str,
+    layer_idx: int,
+    success_ids: Sequence[str],
+    per_model_layer_embeddings: Dict[str, Dict[int, Dict[str, np.ndarray]]],
+    per_model_dims: Dict[str, int],
+) -> np.ndarray:
+    model_layers = per_model_layer_embeddings.get(model_name, {})
+    embeddings_for_layer = model_layers.get(layer_idx, {})
+    if not success_ids:
+        return np.empty((0, per_model_dims[model_name]), dtype=np.float32)
+    missing = [seq_id for seq_id in success_ids if seq_id not in embeddings_for_layer]
+    if missing:
+        preview = ", ".join(missing[:5])
+        raise RuntimeError(
+            f"Missing layer embeddings for model '{model_name}', layer {layer_idx}, "
+            f"and sequence(s): {preview}"
+        )
+    return np.stack([embeddings_for_layer[seq_id] for seq_id in success_ids]).astype(np.float32)
+
+
 def save_embeddings_archive(
     output_path: Path,
     model_names: Sequence[str],
     per_model_embeddings: Dict[str, Dict[str, np.ndarray]],
+    per_model_layer_embeddings: Dict[str, Dict[int, Dict[str, np.ndarray]]],
     per_model_dims: Dict[str, int],
     success_ids: Sequence[str],
     success_sequences: Sequence[str],
@@ -521,6 +1008,22 @@ def save_embeddings_archive(
                 print(
                     f"Saved embeddings for {stacked.shape[0]} sequences with {model_name} to group '{model_name}'"
                 )
+                layer_map = per_model_layer_embeddings.get(model_name, {})
+                if layer_map:
+                    layers_group = model_group.create_group("layers")
+                    for layer_idx in sorted(layer_map):
+                        layer_stacked = stack_layer_embeddings_for_model(
+                            model_name,
+                            layer_idx,
+                            success_ids,
+                            per_model_layer_embeddings,
+                            per_model_dims,
+                        )
+                        layer_group = layers_group.create_group(f"layer_{layer_idx}")
+                        layer_group.create_dataset(
+                            "embeddings", data=layer_stacked, compression="gzip"
+                        )
+                        layer_group.attrs["layer_index"] = int(layer_idx)
         print(f"All embeddings saved to {output_path}")
         return
     if suffix != ".npz":
@@ -528,6 +1031,7 @@ def save_embeddings_archive(
 
     embeddings_dict: Dict[str, np.ndarray] = {}
     npz_dict: Dict[str, Any] = {}
+    layer_embeddings_dict: Dict[str, Dict[str, np.ndarray]] = {}
     for model_name in model_names:
         model_info = MODEL_REGISTRY[model_name]
         model_key = model_info.get("key", model_name)
@@ -538,13 +1042,29 @@ def save_embeddings_archive(
         npz_dict[f"{model_key}_ids"] = np.array(success_ids, dtype=object)
         npz_dict[f"{model_key}_embeddings"] = stacked
         print(f"Computed embeddings for {stacked.shape[0]} sequences with {model_name}")
+        layer_map = per_model_layer_embeddings.get(model_name, {})
+        if layer_map:
+            export_layers: Dict[str, np.ndarray] = {}
+            for layer_idx in sorted(layer_map):
+                layer_stacked = stack_layer_embeddings_for_model(
+                    model_name,
+                    layer_idx,
+                    success_ids,
+                    per_model_layer_embeddings,
+                    per_model_dims,
+                )
+                export_layers[f"layer_{layer_idx}"] = layer_stacked
+                npz_dict[f"{model_key}_layer_{layer_idx}_embeddings"] = layer_stacked
+            layer_embeddings_dict[str(model_key)] = export_layers
     accessions_arr = np.array(success_ids, dtype=object)
     sequences_arr = np.array(success_sequences, dtype=object)
     npz_dict["accessions"] = accessions_arr
     npz_dict["sequences"] = sequences_arr
     npz_dict["embeddings"] = np.array(embeddings_dict, dtype=object)
+    if layer_embeddings_dict:
+        npz_dict["layer_embeddings"] = np.array(layer_embeddings_dict, dtype=object)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(output_path, **npz_dict)
+    np.savez(output_path, **npz_dict)
     print(f"All embeddings saved to {output_path} (NumPy .npz format)")
 
 
@@ -555,33 +1075,73 @@ def process_chunk(
     device: torch.device,
     *,
     failure_report: Optional[Path],
-    model_cache: Dict[str, Tuple[AutoTokenizer, AutoModel, int]],
+    model_cache: Dict[str, Tuple[Any, Any, int]],
+    queue_batch_size: int,
+    max_sequence_length: int,
+    embed_batch_size: int,
+    max_batch_residues: int,
+    model_batch_sizes: Dict[str, int],
+    layer_indices: Optional[Sequence[int]],
+    export_all_layers: bool,
 ) -> Tuple[int, int]:
     ids, sequences = parse_fasta(chunk_path)
     if not ids:
         raise ValueError(f"No sequences found in {chunk_path}")
-    records: List[Tuple[str, str]] = list(zip(ids, sequences))
+    records: List[Tuple[str, str]] = [
+        (
+            seq_id,
+            normalize_sequence_for_embedding(
+                seq,
+                max_sequence_length=max_sequence_length,
+            ),
+        )
+        for seq_id, seq in zip(ids, sequences)
+    ]
     failed_ids: Set[str] = set()
     all_failures: List[EmbeddingFailure] = []
     per_model_embeddings: Dict[str, Dict[str, np.ndarray]] = {}
+    per_model_layer_embeddings: Dict[str, Dict[int, Dict[str, np.ndarray]]] = {}
     per_model_dims: Dict[str, int] = {}
 
     for model_name in model_names:
         tokenizer, model, embedding_dim = model_cache[model_name]
-        result = embed_sequences_for_model(
+        model_embeddings: Dict[str, np.ndarray] = {}
+        model_layer_embeddings: Dict[int, Dict[str, np.ndarray]] = {}
+        model_failures: List[EmbeddingFailure] = []
+        model_failed_ids: Set[str] = set()
+        effective_batch_size = model_batch_sizes.get(model_name, embed_batch_size)
+
+        for queue_records in iter_queue_packages(
             records,
-            model_name,
-            device,
-            skip_ids=failed_ids,
-            fasta_path=chunk_path,
-            model_components=(tokenizer, model, embedding_dim),
-        )
-        per_model_embeddings[model_name] = result.embeddings
-        per_model_dims[model_name] = result.embedding_dim
-        if result.failures:
-            all_failures.extend(result.failures)
-        if result.failed_ids:
-            failed_ids.update(result.failed_ids)
+            queue_batch_size=queue_batch_size,
+        ):
+            result = embed_sequences_for_model(
+                queue_records,
+                model_name,
+                device,
+                skip_ids=failed_ids | model_failed_ids,
+                fasta_path=chunk_path,
+                embed_batch_size=effective_batch_size,
+                max_batch_residues=max_batch_residues,
+                layer_indices=layer_indices,
+                export_all_layers=export_all_layers,
+                model_components=(tokenizer, model, embedding_dim),
+            )
+            model_embeddings.update(result.embeddings)
+            for layer_idx, layer_values in result.layer_embeddings.items():
+                model_layer_embeddings.setdefault(layer_idx, {}).update(layer_values)
+            if result.failures:
+                model_failures.extend(result.failures)
+            if result.failed_ids:
+                model_failed_ids.update(result.failed_ids)
+
+        per_model_embeddings[model_name] = model_embeddings
+        per_model_layer_embeddings[model_name] = model_layer_embeddings
+        per_model_dims[model_name] = embedding_dim
+        if model_failures:
+            all_failures.extend(model_failures)
+        if model_failed_ids:
+            failed_ids.update(model_failed_ids)
 
     success_ids: List[str] = [seq_id for seq_id in ids if seq_id not in failed_ids]
     success_sequences: List[str] = [
@@ -592,6 +1152,7 @@ def process_chunk(
         output_path,
         model_names,
         per_model_embeddings,
+        per_model_layer_embeddings,
         per_model_dims,
         success_ids,
         success_sequences,
@@ -633,14 +1194,79 @@ def main() -> None:
     parser.add_argument(
         "--models",
         nargs="+",
-        choices=list(MODEL_REGISTRY.keys()),
         default=list(MODEL_REGISTRY.keys()),
-        help="Subset of models to run (default: all)",
+        help=(
+            "Subset of models to run (default: all). Canonical names: "
+            "esm2, prost_t5, prot_t5, ankh3, esmc. Full FANTASIA aliases "
+            "such as ESM, Prost-T5, Prot-T5, Ankh3-Large, and ESM3c are accepted."
+        ),
     )
     parser.add_argument(
         "--device",
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="PyTorch device to run inference on (e.g., 'cuda' or 'cpu')",
+    )
+    parser.add_argument(
+        "--queue-batch-size",
+        "--sequence-queue-package",
+        type=int,
+        default=DEFAULT_QUEUE_BATCH_SIZE,
+        help=(
+            "Outer sequence package size before per-model forward batching "
+            "(upstream embedding.queue_batch_size; default: %(default)s)."
+        ),
+    )
+    parser.add_argument(
+        "--max-sequence-length",
+        "--length-filter",
+        type=int,
+        default=0,
+        help=(
+            "Truncate sequences before embedding. "
+            "0 disables truncation (upstream embedding.max_sequence_length)."
+        ),
+    )
+    parser.add_argument(
+        "--embed-batch-size",
+        type=int,
+        default=DEFAULT_EMBED_BATCH_SIZE,
+        help="Maximum number of sequences to embed at once (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--max-batch-residues",
+        type=int,
+        default=DEFAULT_MAX_BATCH_RESIDUES,
+        help=(
+            "Upper bound on padded residues per embedding batch. "
+            "Larger values can be faster but use more memory (default: %(default)s)."
+        ),
+    )
+    parser.add_argument(
+        "--model-batch-sizes",
+        nargs="*",
+        default=(),
+        help=(
+            "Optional per-model forward batch overrides in the form "
+            "'esm2=1 prost_t5=1 prot_t5=4 ankh3=4 esmc=1'."
+        ),
+    )
+    parser.add_argument(
+        "--layer-indices",
+        nargs="*",
+        type=int,
+        default=None,
+        help=(
+            "Optional transformer layer indices to export in addition to the default "
+            "last-layer embeddings. Intended for embedding-only workflows."
+        ),
+    )
+    parser.add_argument(
+        "--all-layers",
+        action="store_true",
+        help=(
+            "Export pooled embeddings for all available transformer layers in addition "
+            "to the default last-layer embeddings."
+        ),
     )
     parser.add_argument(
         "--failure-report",
@@ -697,8 +1323,36 @@ def main() -> None:
 
     device = torch.device(args.device)
     print(f"Using device: {device}")
+    validate_device(device)
+    args.models = list(
+        dict.fromkeys(normalize_model_name(model_name) for model_name in args.models)
+    )
 
-    model_cache: Dict[str, Tuple[AutoTokenizer, AutoModel, int]] = {}
+    model_batch_sizes: Dict[str, int] = {}
+    for item in args.model_batch_sizes:
+        if "=" not in item:
+            raise ValueError(
+                f"Invalid --model-batch-sizes entry {item!r}; expected model=value."
+            )
+        model_name, raw_value = item.split("=", 1)
+        model_name = normalize_model_name(model_name)
+        batch_value = int(raw_value)
+        if batch_value <= 0:
+            raise ValueError("Per-model batch sizes must be positive integers.")
+        model_batch_sizes[model_name] = batch_value
+        if batch_value >= args.queue_batch_size:
+            raise ValueError(
+                f"Per-model batch size for {model_name!r} ({batch_value}) must be "
+                f"strictly smaller than queue_batch_size ({args.queue_batch_size})."
+            )
+
+    if args.embed_batch_size >= args.queue_batch_size:
+        raise ValueError(
+            "embed_batch_size must be strictly smaller than queue_batch_size "
+            "to preserve upstream batching semantics."
+        )
+
+    model_cache: Dict[str, Tuple[Any, Any, int]] = {}
     for model_name in args.models:
         model_cache[model_name] = load_model_components(model_name, device)
 
@@ -706,7 +1360,19 @@ def main() -> None:
     total_failures = 0
     for spec in chunk_specs:
         chunk_total, chunk_failed = process_chunk(
-            spec["fasta"], spec["output"], args.models, device, failure_report=spec["failure_report"], model_cache=model_cache
+            spec["fasta"],
+            spec["output"],
+            args.models,
+            device,
+            failure_report=spec["failure_report"],
+            model_cache=model_cache,
+            queue_batch_size=args.queue_batch_size,
+            max_sequence_length=args.max_sequence_length,
+            embed_batch_size=args.embed_batch_size,
+            max_batch_residues=args.max_batch_residues,
+            model_batch_sizes=model_batch_sizes,
+            layer_indices=args.layer_indices,
+            export_all_layers=args.all_layers,
         )
         total_sequences += chunk_total
         total_failures += chunk_failed
