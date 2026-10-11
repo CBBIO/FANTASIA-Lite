@@ -1,5 +1,8 @@
 # Copy this file to a site-private location and replace every /shared/... value.
 # All host paths and all container mount destinations are configurable.
+# Host paths, runtime.image, and runtime.apptainer_cache support ~, $VAR, and
+# ${VAR}. Variables must be exported in the launcher environment; undefined
+# variables are errors. Container destinations remain literal absolute paths.
 runtime:
   image: /shared/containers/fantasia-lite-cuda128.sif
   apptainer: apptainer

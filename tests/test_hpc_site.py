@@ -1,7 +1,9 @@
 import importlib.util
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
 
@@ -65,6 +67,65 @@ class HpcSiteConfigTests(unittest.TestCase):
             site = hpc_site.load_site_config(self.write_config(root, config_for(root)))
             self.assertEqual(str(site.mount("lookup").container), "/custom/lookup")
             self.assertEqual(str(site.mount("models").container), "/custom/models")
+
+    def test_expands_environment_in_all_host_paths(self):
+        with tempfile.TemporaryDirectory(prefix="fantasia site ") as raw_root:
+            root = Path(raw_root)
+            raw = config_for(root)
+            raw["runtime"]["image"] = "${FANTASIA_SITE_ROOT}/fantasia.sif"
+            raw["runtime"]["apptainer_cache"] = "$FANTASIA_SITE_ROOT/apptainer-cache"
+            for name in raw["storage"]:
+                raw["storage"][name]["host"] = "${FANTASIA_SITE_ROOT}/" + name
+            with patch.dict(os.environ, {"FANTASIA_SITE_ROOT": str(root)}):
+                site = hpc_site.load_site_config(self.write_config(root, raw))
+            self.assertEqual(site.image, root / "fantasia.sif")
+            self.assertEqual(site.apptainer_cache, root / "apptainer-cache")
+            for name in raw["storage"]:
+                self.assertEqual(site.mount(name).host, root / name)
+                self.assertEqual(str(site.mount(name).container), f"/custom/{name}")
+            fasta = root / "inputs" / "query.fa"
+            self.assertEqual(str(hpc_site.mapped_input(site, fasta)), "/custom/inputs/query.fa")
+
+    def test_undefined_variable_reports_field_and_name(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            for field in ("image", "apptainer_cache", *hpc_site.REQUIRED_MOUNTS):
+                with self.subTest(field=field):
+                    raw = config_for(root)
+                    if field in {"image", "apptainer_cache"}:
+                        raw["runtime"][field] = "/shared/${FANTASIA_MISSING}/asset"
+                        location = "runtime." + field
+                    else:
+                        raw["storage"][field]["host"] = "$FANTASIA_MISSING/asset"
+                        location = f"storage.{field}.host"
+                    with patch.dict(os.environ, {}, clear=True):
+                        with self.assertRaises(hpc_site.SiteConfigError) as caught:
+                            hpc_site.load_site_config(self.write_config(root, raw))
+                    self.assertIn(location, str(caught.exception))
+                    self.assertIn("undefined environment variable 'FANTASIA_MISSING'", str(caught.exception))
+
+    def test_tilde_expands_after_environment_substitution(self):
+        with patch.dict(os.environ, {"FANTASIA_SITE_ROOT": "~/fantasia"}):
+            path = hpc_site._absolute_path("${FANTASIA_SITE_ROOT}/models", "storage.models.host")
+        self.assertEqual(path, Path.home() / "fantasia/models")
+        self.assertEqual(hpc_site._absolute_path("~/models", "storage.models.host"), Path.home() / "models")
+
+    def test_relative_expanded_path_is_rejected(self):
+        with patch.dict(os.environ, {"FANTASIA_SITE_ROOT": "relative"}):
+            with self.assertRaisesRegex(hpc_site.SiteConfigError, "must be absolute"):
+                hpc_site._absolute_path("$FANTASIA_SITE_ROOT/models", "storage.models.host")
+
+    def test_shell_expressions_are_not_supported(self):
+        for value in ("/shared/${ROOT:-fallback}", "/shared/$(whoami)", "/shared/${ROOT"):
+            with self.subTest(value=value), self.assertRaisesRegex(hpc_site.SiteConfigError, "invalid variable syntax"):
+                hpc_site._absolute_path(value, "storage.models.host")
+
+    def test_expansion_is_single_pass_and_supports_literal_dollars(self):
+        with patch.dict(os.environ, {"FANTASIA_SITE_ROOT": "/shared/$literal"}):
+            self.assertEqual(
+                hpc_site._absolute_path("${FANTASIA_SITE_ROOT}/$$weights", "storage.models.host"),
+                Path("/shared/$literal/$weights"),
+            )
 
     def test_input_is_mapped_under_configured_mount(self):
         with tempfile.TemporaryDirectory() as raw_root:

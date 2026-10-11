@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from string import Template
 from typing import Any, Dict, Iterable
 
 
@@ -52,7 +54,22 @@ def _as_mapping(value: Any, location: str) -> Dict[str, Any]:
 def _absolute_path(value: Any, location: str) -> Path:
     if not isinstance(value, str) or not value.strip():
         raise SiteConfigError(f"{location} must be a non-empty absolute path.")
-    path = Path(value).expanduser()
+    try:
+        expanded = Template(value).substitute(os.environ)
+    except KeyError as exc:
+        raise SiteConfigError(
+            f"{location} references undefined environment variable {exc.args[0]!r}. "
+            "Export it before running fantasia-hpc."
+        ) from exc
+    except ValueError as exc:
+        raise SiteConfigError(
+            f"{location} has invalid variable syntax; use $NAME or ${{NAME}} "
+            "(or $$ for a literal dollar sign)."
+        ) from exc
+    try:
+        path = Path(expanded).expanduser()
+    except RuntimeError as exc:
+        raise SiteConfigError(f"{location}: cannot resolve home directory in {value!r}.") from exc
     if not path.is_absolute():
         raise SiteConfigError(f"{location} must be absolute: {value!r}")
     return path

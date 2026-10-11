@@ -122,6 +122,37 @@ declares both its host filesystem path and its destination inside the
 container. These destinations can differ entirely from `/lookup`, `/models`,
 or `/output`.
 
+`storage.*.host`, `runtime.image`, and `runtime.apptainer_cache` expand exported
+environment variables written as `$NAME` or `${NAME}`, followed by home-directory
+expansion (`~`). For example:
+
+```bash
+export FANTASIA_DATA_ROOT="$HOME/fantasia"
+```
+
+```yaml
+runtime:
+  image: "${FANTASIA_DATA_ROOT}/fantasia-lite-cuda128.sif"
+  apptainer_cache: "$HOME/.cache/apptainer"
+  use_nv: true
+storage:
+  models:
+    host: "${FANTASIA_DATA_ROOT}/models"
+    container: /srv/fantasia/models
+    mode: ro
+  # Include the other storage entries from the example configuration.
+```
+
+Expansion happens on the host each time the launcher reads the YAML, before
+Apptainer starts. Export the variables on node0 and in the Slurm job environment.
+An undefined variable produces an error naming the field and variable; expanded
+paths must still be absolute. Variables are substituted once, without shell
+execution: `${NAME:-default}` and `$(command)` are not supported. Use `$$` for
+a literal dollar sign. Container destinations are literal absolute paths and
+do not undergo variable or home-directory expansion. This feature is in the
+host launcher, so updating the repository is enough to use it with an existing
+SIF.
+
 The YAML also specifies the image, the Apptainer cache, the URL of a specific
 Zenodo bundle release, and the archive's SHA-256. Do not rely solely on the
 concept DOI: record a specific release URL and obtain or calculate its
