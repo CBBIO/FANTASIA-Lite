@@ -96,7 +96,8 @@ Local artifacts, excluded from Git, are available at:
 ## Automated checks and limits
 
 The eight HPC tests and four container runtime adapter tests passed on the
-host. They cover site YAML, path mapping, bind modes, offline environment,
+host and subsequently inside the existing SIF with external networking disabled
+while validating the GitHub Actions workflow. They cover site YAML, path mapping, bind modes, offline environment,
 temporary lookup archive preparation/checksums, and dependency validation.
 
 ```bash

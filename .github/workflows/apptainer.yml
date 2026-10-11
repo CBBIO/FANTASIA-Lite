@@ -1,0 +1,145 @@
+name: Apptainer image
+
+on:
+  push:
+    branches: ['**']
+    tags: ['apptainer-*']
+    paths:
+      - '.github/workflows/apptainer.yml'
+      - 'containers/**'
+      - 'src/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the tested SIF to GHCR
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apptainer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # Set this repository variable to an Ubuntu x86_64 larger-runner label.
+    runs-on: ${{ vars.APPTAINER_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      SIF_PATH: ${{ github.workspace }}/dist/fantasia-lite-cuda128.sif
+      APPTAINER_TMPDIR: ${{ github.workspace }}/dist/apptainer-build
+      APPTAINER_CACHEDIR: ${{ github.workspace }}/dist/apptainer-cache
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Reclaim disk on the standard disposable runner
+        if: ${{ runner.environment == 'github-hosted' && (vars.APPTAINER_RUNNER == '' || vars.APPTAINER_RUNNER == 'ubuntu-24.04') }}
+        run: |
+          # These unrelated SDKs are preinstalled on the standard hosted VM.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup
+
+      - name: Check build capacity
+        run: |
+          mkdir -p dist "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
+          df -h "$GITHUB_WORKSPACE" "$APPTAINER_TMPDIR"
+          for directory in "$GITHUB_WORKSPACE" "$APPTAINER_TMPDIR"; do
+            available_kib=$(df -Pk "$directory" | awk 'NR == 2 {print $4}')
+            if (( available_kib < 40 * 1024 * 1024 )); then
+              echo "::error::At least 40 GiB free is required. Set APPTAINER_RUNNER to an Ubuntu x86_64 runner with more disk."
+              exit 1
+            fi
+          done
+
+      - name: Install Apptainer
+        run: |
+          sudo add-apt-repository -y ppa:apptainer/ppa
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends apptainer
+          apptainer version | tee dist/apptainer-version.txt
+
+      - name: Build the SIF
+        run: |
+          # Root builds avoid fakeroot/subuid configuration on the CI runner.
+          # Disable the OCI cache to keep temporary disk use bounded.
+          sudo env APPTAINER_TMPDIR="$APPTAINER_TMPDIR" \
+            APPTAINER_CACHEDIR="$APPTAINER_CACHEDIR" \
+            apptainer build --disable-cache "$SIF_PATH" containers/fantasia-lite.def \
+            2>&1 | tee dist/apptainer-build.log
+          sudo chown "$(id -u):$(id -g)" "$SIF_PATH"
+
+      - name: Test the container without external networking
+        run: |
+          # No GPU or weights are needed for imports and launcher unit tests.
+          container_exec=(sudo apptainer exec --cleanenv --containall --net --network none
+            --bind "$GITHUB_WORKSPACE:/workspace:ro" --pwd /workspace
+            --env HF_HUB_OFFLINE=1 --env TRANSFORMERS_OFFLINE=1
+            "$SIF_PATH" /opt/fantasia/venv/bin/python)
+          {
+            "${container_exec[@]}" -c 'import torch; from transformers import EsmModel, T5EncoderModel, T5Tokenizer; from esm.models.esmc import ESMC; import generate_embeddings; assert set(generate_embeddings.MODEL_REGISTRY) == {"esm2", "prost_t5", "prot_t5", "ankh3", "esmc"}; print("Runtime imports passed:", torch.__version__)'
+            "${container_exec[@]}" -m unittest discover -s /workspace/tests -p 'test_hpc_*.py'
+            "${container_exec[@]}" -m unittest discover -s /workspace/tests -p 'test_container_runtime.py'
+          } 2>&1 | tee dist/apptainer-tests.log
+
+      - name: Record checksum and build metadata
+        id: image
+        working-directory: dist
+        run: |
+          image_uri="oras://ghcr.io/${GITHUB_REPOSITORY,,}:sha-${GITHUB_SHA}"
+          echo "uri=$image_uri" >> "$GITHUB_OUTPUT"
+          echo "$image_uri" > image-uri.txt
+          echo "$GITHUB_SHA" > source-commit.txt
+          sha256sum fantasia-lite-cuda128.sif > fantasia-lite-cuda128.sif.sha256
+          sudo apptainer exec --cleanenv "$SIF_PATH" \
+            cat /opt/fantasia/containers/installed.txt > installed.txt
+          apptainer inspect --json "$SIF_PATH" > image-inspect.json
+
+      - name: Publish the tested SIF to GHCR
+        if: ${{ github.event_name == 'push' || inputs.publish }}
+        env:
+          APPTAINER_DOCKER_USERNAME: ${{ github.actor }}
+          APPTAINER_DOCKER_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_URI: ${{ steps.image.outputs.uri }}
+        run: |
+          apptainer push "$SIF_PATH" "$IMAGE_URI"
+          {
+            echo '### Published Apptainer image'
+            echo 'Run on the connected login node:'
+            echo '```bash'
+            printf 'apptainer pull fantasia-lite-cuda128.sif %s\n' "$IMAGE_URI"
+            echo '```'
+            echo 'SIF SHA-256:'
+            echo '```text'
+            cat dist/fantasia-lite-cuda128.sif.sha256
+            echo '```'
+            echo 'The package may initially be private. See docs/apptainer_hpc.md for access setup.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain logs, checksum, and dependency inventory
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: apptainer-build-${{ github.sha }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            dist/apptainer-*.log
+            dist/apptainer-version.txt
+            dist/fantasia-lite-cuda128.sif.sha256
+            dist/installed.txt
+            dist/image-inspect.json
+            dist/image-uri.txt
+            dist/source-commit.txt

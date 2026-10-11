@@ -8,6 +8,75 @@ and fails if they are missing: jobs do not install packages or access indexes.
 
 ## Build the image
 
+### Build and publish with GitHub Actions
+
+The [Apptainer workflow](../.github/workflows/apptainer.yml) builds and tests a
+SIF when a branch push changes the workflow, container, application, scripts,
+tests, or `pyproject.toml`. Tags matching `apptainer-*` also trigger a build.
+It publishes the tested image to GHCR using the repository's `GITHUB_TOKEN`
+with `packages: write`; no additional publishing secret is required. The
+organization must allow GitHub Actions to create packages. An existing GHCR
+package must grant this repository Actions access.
+
+After committing and pushing the workflow, open **Actions → Apptainer image**
+in GitHub. The job summary provides the exact pull command and SIF SHA-256.
+The package name is the lowercase repository name, and the tag is
+`sha-<full-commit-sha>`; for this repository:
+
+```bash
+# On node0, replace FULL_COMMIT_SHA with the successful workflow's commit.
+apptainer pull fantasia-lite-cuda128.sif \
+  oras://ghcr.io/cbbio/fantasia-lite:sha-FULL_COMMIT_SHA
+```
+
+Set `runtime.image` in the site YAML to the downloaded SIF's absolute path.
+Download the `apptainer-build-...` artifact from that workflow run for the
+checksum, dependency inventory, and build/test logs. Extract the checksum file
+next to the image and verify it:
+
+```bash
+sha256sum -c fantasia-lite-cuda128.sif.sha256
+```
+
+Model weights and lookup data remain outside the SIF. Run `prepare` on node0
+and `validate` before submitting jobs as described below.
+
+GHCR packages are initially private, even for a public source repository.
+For anonymous pulls, a package administrator can change the package visibility
+to public. For private packages, authenticate interactively on node0 using a
+GitHub personal access token (classic) with `read:packages` and access to the
+package, entering the token at the password prompt:
+
+```bash
+apptainer registry login --username YOUR_GITHUB_USERNAME oras://ghcr.io
+```
+
+See the official [GHCR authentication and package access documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
+and [Apptainer ORAS support](https://apptainer.org/docs/user/latest/docker_and_oci.html).
+
+The default runner is `ubuntu-24.04`. The job removes unrelated SDKs from this
+disposable hosted runner and checks for at least 40 GiB free before building.
+This is a starting capacity check, not a guarantee that future dependency
+versions will fit. If disk space is insufficient, set the repository Actions
+variable `APPTAINER_RUNNER` to an Ubuntu x86_64 larger-runner label with more
+storage. A custom runner needs passwordless sudo and permission to install
+Apptainer and create network namespaces. SDK cleanup is skipped on custom
+runners. Do not use a shared production HPC login node as a build runner.
+
+The job builds without a GPU, tests runtime imports and the launcher tests in
+a container with external networking disabled, and publishes only after they
+pass. It does not download model weights or perform GPU inference. Concurrent
+pushes to the same branch cancel the older build. The workflow also supports
+manual dispatch with `publish: false` for build/test-only runs once it is
+available on the repository's default branch. Build-only runs retain the small
+logs/metadata artifact, not the SIF.
+
+Commit tags identify the source, but a rebuild of the same commit can overwrite
+its tag: the dependency/base-image limitations below still apply. Save the SIF
+checksum from the successful run when recording an experiment.
+
+### Build locally
+
 Build on a system with Internet access. From the repository root:
 
 ```bash
