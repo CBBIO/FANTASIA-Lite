@@ -80,6 +80,10 @@ Thumbs.db
 *.tar.gz
 *.zip
 
+# Apptainer artifacts
+*.sif
+apptainer-cache/
+
 # Timing and benchmark reports
 pipeline_timing_analysis.csv
 *_benchmark.csv

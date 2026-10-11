@@ -11,6 +11,9 @@ The simplest way to run it is:
 ./scripts/minimal_pipeline.sh your_proteins.fa
 ```
 
+For an Apptainer/Singularity deployment on an HPC system where compute nodes
+have no Internet access, see [the offline HPC guide](docs/apptainer_hpc.md).
+
 Before any annotation run can work, create `data/lookup/`, then download the
 required lookup data from [Zenodo](https://doi.org/10.5281/zenodo.19742925). These
 directories are intentionally not tracked by Git and are not created by a

@@ -1,0 +1,41 @@
+# Copy this file to a site-private location and replace every /shared/... value.
+# All host paths and all container mount destinations are configurable.
+runtime:
+  image: /shared/containers/fantasia-lite-cuda128.sif
+  apptainer: apptainer
+  apptainer_cache: /shared/fantasia/apptainer-cache
+  use_nv: true
+
+storage:
+  lookup:
+    host: /shared/fantasia/lookup
+    container: /srv/fantasia/lookup
+    mode: ro
+  models:
+    host: /shared/fantasia/huggingface-cache
+    container: /srv/fantasia/models
+    mode: ro
+  inputs:
+    host: /shared/fantasia/inputs
+    container: /srv/fantasia/inputs
+    mode: ro
+  outputs:
+    host: /shared/fantasia/outputs
+    container: /srv/fantasia/outputs
+    mode: rw
+  scratch:
+    host: /shared/fantasia/scratch
+    container: /srv/fantasia/scratch
+    mode: rw
+  staging:
+    host: /shared/fantasia/staging
+    container: /srv/fantasia/staging
+    mode: rw
+
+# The checksum must be for a specific released archive, never a mutable URL
+# without an accompanying SHA-256. `fantasia-hpc prepare` refuses placeholders.
+assets:
+  lookup:
+    url: https://zenodo.org/records/REPLACE_WITH_RELEASE/files/fantasia_lite_data_folder.tgz
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    archive_name: fantasia_lite_data_folder.tgz
