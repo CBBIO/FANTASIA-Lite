@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""HPC launcher for the offline Apptainer FANTASIA Lite workflow."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Sequence
+
+from hpc_site import SiteConfig, SiteConfigError, load_site_config, mapped_input, run_mounts
+
+
+ROOT = Path(__file__).resolve().parents[1]
+ASSET_SCRIPT = "/opt/fantasia/scripts/hpc_assets.py"
+
+
+def env_for(site: SiteConfig) -> dict[str, str]:
+    environment = os.environ.copy()
+    environment["APPTAINER_CACHEDIR"] = str(site.apptainer_cache)
+    environment["SINGULARITY_CACHEDIR"] = str(site.apptainer_cache)
+    return environment
+
+
+def run_command(command: Sequence[str], site: SiteConfig, *, dry_run: bool = False) -> None:
+    print("+", " ".join(str(part) for part in command), flush=True)
+    if not dry_run:
+        subprocess.run(list(map(str, command)), check=True, env=env_for(site))
+
+
+def validate_host_paths(site: SiteConfig, *, command: str) -> None:
+    if not site.image.is_file():
+        raise SiteConfigError(f"Container image does not exist: {site.image}")
+    if command == "prepare":
+        for name in ("lookup", "models", "staging"):
+            site.mount(name).host.mkdir(parents=True, exist_ok=True)
+        site.apptainer_cache.mkdir(parents=True, exist_ok=True)
+    else:
+        for name in ("lookup", "models"):
+            if not site.mount(name).host.is_dir():
+                raise SiteConfigError(f"Configured storage.{name}.host is not a directory: {site.mount(name).host}")
+
+
+def asset_command(site: SiteConfig, mode: str, models: list[str]) -> list[str]:
+    bindings: list[str] = []
+    mount_mode = "rw" if mode == "prepare" else "ro"
+    for name in ("lookup", "models", "staging"):
+        mount = site.mount(name)
+        bindings.extend(["--bind", mount.bind_argument(mode=mount_mode)])
+    command = [
+        site.apptainer,
+        "exec",
+        "--cleanenv",
+        *bindings,
+        "--env",
+        f"HF_HOME={site.mount('models').container}",
+        "--env",
+        f"HF_HUB_CACHE={site.mount('models').container}",
+        "--env", f"HF_HUB_OFFLINE={int(mode == 'validate')}",
+        "--env", f"TRANSFORMERS_OFFLINE={int(mode == 'validate')}",
+    ]
+    command.extend([str(site.image), "/opt/fantasia/venv/bin/python", ASSET_SCRIPT, mode])
+    command.extend(["--lookup-dir", str(site.mount("lookup").container)])
+    command.extend(["--model-cache-dir", str(site.mount("models").container)])
+    command.extend(["--staging-dir", str(site.mount("staging").container)])
+    command.extend(["--models", *models])
+    if mode == "prepare":
+        if not site.lookup_url or not site.lookup_sha256:
+            raise SiteConfigError(
+                "assets.lookup.url and assets.lookup.sha256 are required for prepare."
+            )
+        command.extend(["--lookup-url", site.lookup_url])
+        command.extend(["--lookup-sha256", site.lookup_sha256])
+        command.extend(["--lookup-archive-name", site.lookup_archive_name])
+    return command
+
+
+def output_arguments(site: SiteConfig) -> list[str]:
+    lookup = site.mount("lookup").container
+    output = site.mount("outputs").container
+    scratch = site.mount("scratch").container
+    return [
+        "--lookup-npz", str(lookup / "lookup_table.npz"),
+        "--annotations-json", str(lookup / "annotations.json"),
+        "--accessions-json", str(lookup / "accessions.json"),
+        "--embeddings-npz", str(output / "query_embeddings.npz"),
+        "--config-yaml", str(output / "fantasia_config.yaml"),
+        "--results-csv", str(output / "results.csv"),
+        "--topgo-dir", str(output / "topgo"),
+        "--failure-report", str(output / "failed_sequences.csv"),
+        "--run-log", str(output / "run.log"),
+        "--run-metadata-yaml", str(output / "run_metadata.yaml"),
+        "--model-provenance-yaml", str(output / "model_provenance.yaml"),
+        "--chunk-dir", str(scratch / "fasta_chunks"),
+        "--chunk-embed-dir", str(scratch / "chunk_embeddings"),
+        "--chunk-results-dir", str(scratch / "chunk_results"),
+        "--chunk-config-dir", str(scratch / "chunk_configs"),
+        "--chunk-failure-dir", str(scratch / "failures"),
+    ]
+
+
+def default_run_name() -> str:
+    return os.environ.get("SLURM_JOB_ID") or datetime.now().strftime("run-%Y%m%d-%H%M%S")
+
+
+def run_pipeline(site: SiteConfig, input_path: Path, run_name: str, extra_args: list[str], dry_run: bool) -> None:
+    input_host = input_path.expanduser().resolve()
+    if not input_host.is_file():
+        raise SiteConfigError(f"Input FASTA does not exist: {input_host}")
+    input_container = mapped_input(site, input_host)
+    mounts = list(run_mounts(site, run_name))
+    for mount in mounts:
+        if mount.mode == "rw" and not dry_run:
+            mount.host.mkdir(parents=True, exist_ok=True)
+    binds: list[str] = []
+    for mount in mounts:
+        binds.extend(["--bind", mount.bind_argument()])
+    command = [site.apptainer, "run", "--cleanenv"]
+    if site.use_nv:
+        command.append("--nv")
+    command.extend(binds)
+    if "CUDA_VISIBLE_DEVICES" in os.environ:
+        command.extend(["--env", f"CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']}"])
+    command.extend(
+        [
+            "--env", f"HF_HOME={site.mount('models').container}",
+            "--env", f"HF_HUB_CACHE={site.mount('models').container}",
+            "--env", "HF_HUB_OFFLINE=1",
+            "--env", "TRANSFORMERS_OFFLINE=1",
+            "--env", "FANTASIA_OFFLINE=1",
+            "--env", f"TMPDIR={site.mount('scratch').container}",
+            "--pwd", str(site.mount("scratch").container),
+            str(site.image),
+            str(input_container),
+            *output_arguments(site),
+            *extra_args,
+        ]
+    )
+    run_command(command, site, dry_run=dry_run)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--site-config", type=Path, required=True, help="HPC site YAML file.")
+    parser.add_argument("--dry-run", action="store_true", help="Print Apptainer commands without running them.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    for name in ("prepare", "validate"):
+        sub = subparsers.add_parser(name)
+        sub.add_argument("--models", nargs="+", default=["esm2", "prost_t5", "prot_t5", "ankh3", "esmc"])
+    run = subparsers.add_parser("run")
+    run.add_argument("--input", type=Path, required=True, help="FASTA below storage.inputs.host.")
+    run.add_argument("--run-name", default=default_run_name(), help="Output/scratch subdirectory name.")
+    run.add_argument("pipeline_args", nargs=argparse.REMAINDER, help="Arguments passed after -- to fantasia_pipeline.")
+    args = parser.parse_args()
+
+    try:
+        site = load_site_config(args.site_config)
+        validate_host_paths(site, command=args.command)
+        if args.command in {"prepare", "validate"}:
+            run_command(asset_command(site, args.command, args.models), site, dry_run=args.dry_run)
+        else:
+            extras = list(args.pipeline_args)
+            if extras[:1] == ["--"]:
+                extras = extras[1:]
+            run_pipeline(site, args.input, args.run_name, extras, args.dry_run)
+    except SiteConfigError as exc:
+        parser.error(str(exc))
+    except subprocess.CalledProcessError as exc:
+        return exc.returncode or 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

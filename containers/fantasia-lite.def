@@ -1,0 +1,44 @@
+Bootstrap: docker
+From: nvidia/cuda:12.8.1-runtime-ubuntu24.04
+
+%files
+    src /opt/fantasia/src
+    scripts /opt/fantasia/scripts
+    pyproject.toml /opt/fantasia/pyproject.toml
+    containers /opt/fantasia/containers
+
+%environment
+    export PATH=/opt/fantasia/venv/bin:$PATH
+    export PYTHONPATH=/opt/fantasia/src${PYTHONPATH:+:$PYTHONPATH}
+    export HF_HUB_DISABLE_TELEMETRY=1
+    export PYTHONNOUSERSITE=1
+    export PYTHONDONTWRITEBYTECODE=1
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    export PIP_NO_CACHE_DIR=1
+    apt-get update
+    apt-get install -y --no-install-recommends python3 python3-venv python3-pip ca-certificates git build-essential libzstd-dev
+    rm -rf /var/lib/apt/lists/*
+
+    python3 -m venv /opt/fantasia/venv
+    /opt/fantasia/venv/bin/pip install --upgrade pip==24.3.1 setuptools==75.6.0 wheel==0.45.1
+    /opt/fantasia/venv/bin/pip install --index-url https://download.pytorch.org/whl/cu128 torch==2.7.1
+    /opt/fantasia/venv/bin/pip install -r /opt/fantasia/containers/requirements-cuda128.lock
+    /opt/fantasia/venv/bin/pip install --no-deps esm==3.2.3
+    /opt/fantasia/venv/bin/pip install --no-deps /opt/fantasia
+    /opt/fantasia/venv/bin/python /opt/fantasia/containers/check_runtime.py
+    /opt/fantasia/venv/bin/pip freeze > /opt/fantasia/containers/installed.txt
+
+    # fantasia_pipeline retains its legacy environment installer. In this image
+    # validate its pip requests against installed package metadata, without
+    # downloading or writing packages. src/ is copied without modification.
+    cp /opt/fantasia/containers/runtime_pip.py /opt/fantasia/venv/bin/pip
+    chmod 0755 /opt/fantasia/venv/bin/pip
+    chmod 0755 /opt/fantasia/scripts/fantasia-hpc /opt/fantasia/scripts/hpc_assets.py
+
+%runscript
+    exec /opt/fantasia/venv/bin/python /opt/fantasia/src/fantasia_pipeline.py "$@"
+
+%test
+    /opt/fantasia/venv/bin/python -c 'import torch, transformers, esm, h5py, yaml; print(torch.__version__)'

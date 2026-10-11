@@ -1,7 +1,7 @@
 
-# FANTASIA Lite V1.1
+# FANTASIA Lite V1.2
 
-**FANTASIA Lite V1.1** is a streamlined, standalone version of the full [FANTASIA pipeline](https://github.com/CBBIO/FANTASIA), designed for fast and efficient Gene Ontology (GO) annotation of protein sequences from local FASTA files using embedding comparisons.
+**FANTASIA Lite V1.2** is a streamlined, standalone version of the full [FANTASIA pipeline](https://github.com/CBBIO/FANTASIA), designed for fast and efficient Gene Ontology (GO) annotation of protein sequences from local FASTA files using embedding comparisons.
 
 FANTASIA Lite generates deep learning embeddings and performs nearest-neighbor annotation transfer, while intentionally removing the service stack used by the full project. The bundled lookup table covers five reference embedding spaces, and the built-in Lite embedder can generate matching query embeddings for all five model families exposed through the local CLI.
 
@@ -10,6 +10,9 @@ The simplest way to run it is:
 ```bash
 ./scripts/minimal_pipeline.sh your_proteins.fa
 ```
+
+For an Apptainer/Singularity deployment on an HPC system where compute nodes
+have no Internet access, see [the offline HPC guide](docs/apptainer_hpc.md).
 
 Before any annotation run can work, create `data/lookup/`, then download the
 required lookup data from [Zenodo](https://doi.org/10.5281/zenodo.19742925). These
@@ -41,6 +44,10 @@ This repository is ideal for users who want:
 - High-quality functional annotation using experimental evidence from UniProt
 
 For advanced features, large-scale annotation, or integration with external databases, see the full [FANTASIA repository](https://github.com/CBBIO/FANTASIA).
+
+## What's New In V1.2
+
+Lite V1.2 adds an Apptainer workflow for offline HPC systems. It provides a CUDA image, a configurable site YAML, a node0-only asset preparation command, offline validation, and a Slurm launcher that mounts lookup data, model caches, inputs, outputs, and scratch storage explicitly. See [Apptainer on HPC systems](docs/apptainer_hpc.md).
 
 ## What's New In V1.1
 

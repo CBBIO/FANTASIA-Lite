@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=fantasia-lite
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:a100:1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
+#SBATCH --time=08:00:00
+
+set -euo pipefail
+
+# Adjust these paths for the site. The launcher resolves every filesystem and
+# container path from this YAML file; no /lookup or /models default is assumed.
+SITE_CONFIG="${SITE_CONFIG:?Set SITE_CONFIG to the site YAML path}"
+INPUT_FASTA="${INPUT_FASTA:?Set INPUT_FASTA below storage.inputs.host}"
+FANTASIA_ROOT="${FANTASIA_ROOT:?Set FANTASIA_ROOT to the repository path}"
+RUN_NAME="${RUN_NAME:-${SLURM_JOB_ID}}"
+
+"$FANTASIA_ROOT/scripts/fantasia-hpc" \
+  --site-config "$SITE_CONFIG" \
+  run \
+  --input "$INPUT_FASTA" \
+  --run-name "$RUN_NAME" \
+  -- \
+  --serial-models \
+  --embed-models prot_t5
