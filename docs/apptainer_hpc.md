@@ -29,6 +29,20 @@ apptainer pull fantasia-lite-cuda128.sif \
   oras://ghcr.io/cbbio/fantasia-lite:sha-FULL_COMMIT_SHA
 ```
 
+Successful publications from `feat/apptainer-offline-hpc` or the repository's
+default branch also update `latest` to the same SIF. Other branches and tag
+builds publish only their commit tag. To download the most recently published
+image from either of those branches:
+
+```bash
+apptainer pull fantasia-lite-cuda128.sif \
+  oras://ghcr.io/cbbio/fantasia-lite:latest
+```
+
+`latest` moves whenever an eligible build publishes successfully; it does not
+identify a fixed release. Use the commit tag and recorded SIF checksum for
+experiments that need a specific image.
+
 Set `runtime.image` in the site YAML to the downloaded SIF's absolute path.
 Download the `apptainer-build-...` artifact from that workflow run for the
 checksum, dependency inventory, and build/test logs. Extract the checksum file

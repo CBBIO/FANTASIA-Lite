@@ -113,14 +113,25 @@ jobs:
           APPTAINER_DOCKER_USERNAME: ${{ github.actor }}
           APPTAINER_DOCKER_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
           IMAGE_URI: ${{ steps.image.outputs.uri }}
+          UPDATE_LATEST: ${{ github.ref == 'refs/heads/feat/apptainer-offline-hpc' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
         run: |
           apptainer push "$SIF_PATH" "$IMAGE_URI"
+          latest_uri="oras://ghcr.io/${GITHUB_REPOSITORY,,}:latest"
+          if [[ "$UPDATE_LATEST" == 'true' ]]; then
+            apptainer push "$SIF_PATH" "$latest_uri"
+          fi
           {
             echo '### Published Apptainer image'
             echo 'Run on the connected login node:'
             echo '```bash'
             printf 'apptainer pull fantasia-lite-cuda128.sif %s\n' "$IMAGE_URI"
             echo '```'
+            if [[ "$UPDATE_LATEST" == 'true' ]]; then
+              echo 'The same image is also available through the moving latest tag:'
+              echo '```bash'
+              printf 'apptainer pull fantasia-lite-cuda128.sif %s\n' "$latest_uri"
+              echo '```'
+            fi
             echo 'SIF SHA-256:'
             echo '```text'
             cat dist/fantasia-lite-cuda128.sif.sha256
