@@ -89,9 +89,10 @@ jobs:
             --env HF_HUB_OFFLINE=1 --env TRANSFORMERS_OFFLINE=1
             "$SIF_PATH" /opt/fantasia/venv/bin/python)
           {
-            "${container_exec[@]}" -c 'import torch; from transformers import EsmModel, T5EncoderModel, T5Tokenizer; from esm.models.esmc import ESMC; import generate_embeddings; assert set(generate_embeddings.MODEL_REGISTRY) == {"esm2", "prost_t5", "prot_t5", "ankh3", "esmc"}; print("Runtime imports passed:", torch.__version__)'
+            "${container_exec[@]}" -c 'import faiss, torch; from transformers import EsmModel, T5EncoderModel, T5Tokenizer; from esm.models.esmc import ESMC; import generate_embeddings; assert set(generate_embeddings.MODEL_REGISTRY) == {"esm2", "prost_t5", "prot_t5", "ankh3", "esmc"}; print("Runtime imports passed:", torch.__version__, faiss.__version__)'
             "${container_exec[@]}" -m unittest discover -s /workspace/tests -p 'test_hpc_*.py'
             "${container_exec[@]}" -m unittest discover -s /workspace/tests -p 'test_container_runtime.py'
+            "${container_exec[@]}" -m unittest discover -s /workspace/tests -p 'test_faiss_*.py'
           } 2>&1 | tee dist/apptainer-tests.log
 
       - name: Record checksum and build metadata
