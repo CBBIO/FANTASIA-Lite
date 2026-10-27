@@ -35,7 +35,7 @@ def validate_host_paths(site: SiteConfig, *, command: str) -> None:
     if not site.image.is_file():
         raise SiteConfigError(f"Container image does not exist: {site.image}")
     if command == "prepare":
-        for name in ("lookup", "models", "staging"):
+        for name in ("lookup", "models", "staging", "faiss_cache"):
             site.mount(name).host.mkdir(parents=True, exist_ok=True)
         site.apptainer_cache.mkdir(parents=True, exist_ok=True)
     else:
@@ -99,6 +99,7 @@ def output_arguments(site: SiteConfig) -> list[str]:
         "--chunk-results-dir", str(scratch / "chunk_results"),
         "--chunk-config-dir", str(scratch / "chunk_configs"),
         "--chunk-failure-dir", str(scratch / "failures"),
+        "--faiss-cache-dir", str(site.mount("faiss_cache").container),
     ]
 
 

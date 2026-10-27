@@ -14,7 +14,12 @@ class HpcLauncherTests(unittest.TestCase):
     def test_dry_run_uses_configured_mounts_and_offline_environment(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
-            folders = {name: root / name for name in ("lookup", "models", "inputs", "outputs", "scratch", "staging")}
+            folders = {
+                name: root / name
+                for name in (
+                    "lookup", "models", "inputs", "outputs", "scratch", "staging", "faiss_cache"
+                )
+            }
             for folder in folders.values():
                 folder.mkdir()
             image = root / "fantasia.sif"
@@ -55,6 +60,8 @@ class HpcLauncherTests(unittest.TestCase):
             self.assertIn("--nv", result.stdout)
             self.assertIn(f"{folders['lookup']}:/site/lookup:ro", result.stdout)
             self.assertIn(f"{folders['outputs']}/job-42:/site/outputs:rw", result.stdout)
+            self.assertIn(f"{folders['faiss_cache']}:/site/faiss_cache:rw", result.stdout)
+            self.assertIn("--faiss-cache-dir /site/faiss_cache", result.stdout)
             self.assertIn("HF_HUB_OFFLINE=1", result.stdout)
             self.assertIn("HF_HUB_CACHE=/site/models", result.stdout)
             self.assertIn("/site/inputs/query.fa", result.stdout)

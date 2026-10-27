@@ -30,6 +30,11 @@ storage:
     host: /shared/fantasia/scratch
     container: /srv/fantasia/scratch
     mode: rw
+  faiss_cache:
+    # Persistent across jobs; must be writable even though lookup is read-only.
+    host: /shared/fantasia/faiss-cache
+    container: /srv/fantasia/faiss-cache
+    mode: rw
   staging:
     host: /shared/fantasia/staging
     container: /srv/fantasia/staging

@@ -27,6 +27,7 @@ def config_for(root: Path) -> dict:
         "outputs": root / "outputs",
         "scratch": root / "scratch",
         "staging": root / "staging",
+        "faiss_cache": root / "faiss-cache",
     }
     for path in paths.values():
         path.mkdir(parents=True, exist_ok=True)
@@ -147,6 +148,10 @@ class HpcSiteConfigTests(unittest.TestCase):
             self.assertEqual(mounts["models"].mode, "ro")
             self.assertEqual(mounts["outputs"].mode, "rw")
             self.assertTrue(str(mounts["outputs"].host).endswith("outputs/12345"))
+            self.assertEqual(mounts["faiss_cache"].mode, "rw")
+            self.assertEqual(
+                mounts["faiss_cache"].host, Path(raw["storage"]["faiss_cache"]["host"])
+            )
 
     def test_rejects_compute_assets_configured_writable(self):
         with tempfile.TemporaryDirectory() as raw_root:
