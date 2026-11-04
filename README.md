@@ -390,8 +390,10 @@ outputs_<timestamp>/
 - `results.csv` contains final consolidated GO assignments. A protein can have
   multiple rows because it can receive multiple GO terms.
 - `k.<N>.results.csv` is the donor-level table before GO consolidation. It
-  preserves `hit_rank`, reference IDs, UniProt accessions, distances, and GO
-  terms.
+  preserves `hit_rank`, `neighbor_rank`, reference IDs, UniProt accessions,
+  distances, and GO terms. `neighbor_rank` is the donor's neighbour position
+  (1..k) per query and model; `hit_rank` ranks individual GO rows, so one donor
+  spans several `hit_rank` values.
 - `failed_sequences.csv` reports proteins that could not be embedded.
 - `run_metadata.yaml` records the command, Git commit, parameters, device,
   coverage, and stage timings.
