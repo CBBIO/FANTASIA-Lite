@@ -85,7 +85,8 @@ selected donor/GO row before that consolidation.
 | Column | Meaning |
 |---|---|
 | `query_accession` | Input FASTA identifier |
-| `hit_rank` | Donor rank in raw output |
+| `hit_rank` | Row rank by distance within `(model_key, query_accession)`; one rank per GO row, so a donor with n GO terms spans n consecutive ranks |
+| `neighbor_rank` | Raw output only: donor's nearest-neighbour position (1..k) within `(model_key, query_accession)`, shared by all its GO rows; filter `neighbor_rank <= k` to subset neighbours |
 | `reference_id` | Internal donor identifier |
 | `uniprot_accession` | Donor UniProt accession |
 | `model_key` | Embedding space |
