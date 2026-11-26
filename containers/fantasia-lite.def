@@ -41,4 +41,4 @@ From: nvidia/cuda:12.8.1-runtime-ubuntu24.04
     exec /opt/fantasia/venv/bin/python /opt/fantasia/src/fantasia_pipeline.py "$@"
 
 %test
-    /opt/fantasia/venv/bin/python -c 'import torch, transformers, esm, h5py, yaml; print(torch.__version__)'
+    /opt/fantasia/venv/bin/python -c 'import torch, transformers, esm, faiss, h5py, yaml; print(torch.__version__)'

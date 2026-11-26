@@ -42,7 +42,15 @@ class SiteConfig:
             raise SiteConfigError(f"Missing storage.{name} in site configuration.") from exc
 
 
-REQUIRED_MOUNTS = ("lookup", "models", "inputs", "outputs", "scratch", "staging")
+REQUIRED_MOUNTS = (
+    "lookup",
+    "models",
+    "inputs",
+    "outputs",
+    "scratch",
+    "staging",
+    "faiss_cache",
+)
 
 
 def _as_mapping(value: Any, location: str) -> Dict[str, Any]:
@@ -123,7 +131,7 @@ def load_site_config(path: Path) -> SiteConfig:
     for name in ("lookup", "models", "inputs"):
         if mounts[name].mode != "ro":
             raise SiteConfigError(f"storage.{name}.mode must be 'ro' for compute jobs.")
-    for name in ("outputs", "scratch"):
+    for name in ("outputs", "scratch", "faiss_cache"):
         if mounts[name].mode != "rw":
             raise SiteConfigError(f"storage.{name}.mode must be 'rw' for compute jobs.")
 
@@ -182,3 +190,5 @@ def run_mounts(site: SiteConfig, run_name: str) -> Iterable[Mount]:
     for name in ("outputs", "scratch"):
         mount = site.mount(name)
         yield Mount(name, mount.host / run_name, mount.container, "rw")
+    # This mount intentionally is not namespaced by run: cached indexes are reused.
+    yield site.mount("faiss_cache")

@@ -150,6 +150,9 @@ class PipelineConfig:
     serial_models: bool
     device: Optional[str]
     use_gpu_lookup: Optional[bool]
+    lookup_backend: str
+    faiss_cache_dir: Path
+    rebuild_faiss_index: bool
     limit_per_entry: int
     distance_metric: str
     lookup_batch_size: int
@@ -189,6 +192,19 @@ class PipelineConfig:
         else:
             use_gpu_lookup = None
         torch_index = args.torch_index or env.get("TORCH_INDEX")
+        lookup_backend = str(args.lookup_backend).lower()
+        if lookup_backend == "faiss" and use_gpu_lookup is True:
+            raise PipelineError(
+                "--lookup-backend faiss uses exact CPU lookup and cannot be combined "
+                "with --use-gpu-lookup. Remove --use-gpu-lookup or select --lookup-backend numpy."
+            )
+
+        lookup_npz = Path(args.lookup_npz).resolve()
+        faiss_cache_dir = (
+            Path(args.faiss_cache_dir).resolve()
+            if args.faiss_cache_dir
+            else lookup_npz.parent / "faiss"
+        )
 
         results_csv = Path(args.results_csv).resolve()
         raw_results_csv: Optional[Path]
@@ -203,7 +219,7 @@ class PipelineConfig:
         return cls(
             fasta_path=fasta_path,
             venv_dir=Path(args.venv_dir).resolve(),
-            lookup_npz=Path(args.lookup_npz).resolve(),
+            lookup_npz=lookup_npz,
             annotations_json=Path(args.annotations_json).resolve(),
             accessions_json=Path(args.accessions_json).resolve(),
             embeddings_npz=Path(args.embeddings_npz).resolve(),
@@ -220,6 +236,9 @@ class PipelineConfig:
             serial_models=serial_models,
             device=device,
             use_gpu_lookup=use_gpu_lookup,
+            lookup_backend=lookup_backend,
+            faiss_cache_dir=faiss_cache_dir,
+            rebuild_faiss_index=args.rebuild_faiss_index,
             limit_per_entry=args.limit_per_entry,
             distance_metric=args.distance_metric,
             lookup_batch_size=args.lookup_batch_size,
@@ -429,6 +448,25 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--distance-metric",
         default=DEFAULT_DISTANCE_METRIC,
         help="Distance metric used during lookup (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--lookup-backend",
+        choices=("numpy", "faiss"),
+        default="numpy",
+        help="CPU lookup implementation (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--faiss-cache-dir",
+        default=None,
+        help=(
+            "Directory for persistent FAISS indexes (defaults to a 'faiss' directory "
+            "beside --lookup-npz)."
+        ),
+    )
+    parser.add_argument(
+        "--rebuild-faiss-index",
+        action="store_true",
+        help="Rebuild FAISS indexes even when a compatible cached index exists.",
     )
     parser.add_argument(
         "--lookup-batch-size",
@@ -697,7 +735,7 @@ import json
 import platform
 packages = [
     "fantasia-lite", "transformers", "huggingface-hub", "torch",
-    "numpy", "pandas", "scipy", "biopython", "sentencepiece",
+    "numpy", "pandas", "scipy", "biopython", "sentencepiece", "faiss-cpu",
 ]
 versions = {"python": platform.python_version()}
 for package in packages:
@@ -894,6 +932,8 @@ def install_packages(config: PipelineConfig) -> str:
         "huggingface-hub",
         "httpx",
     ]
+    if config.lookup_backend == "faiss":
+        base_deps.append("faiss-cpu")
     esmc_runtime_deps = [
         "ipython",
         "einops",
@@ -943,6 +983,12 @@ def install_packages(config: PipelineConfig) -> str:
 
 def should_use_gpu_lookup(config: PipelineConfig, device: str) -> bool:
     """Decide whether the lookup stage should run via the GPU script."""
+    if config.lookup_backend == "faiss":
+        if config.use_gpu_lookup:
+            raise PipelineError(
+                "--lookup-backend faiss requires CPU lookup and cannot use --use-gpu-lookup."
+            )
+        return False
     if config.use_gpu_lookup is not None:
         if config.use_gpu_lookup and not device.lower().startswith("cuda"):
             raise PipelineError(
@@ -1323,6 +1369,10 @@ def write_config_yaml(config: PipelineConfig) -> None:
         f"annotations_path: {config.annotations_json}",
         f"accession_path: {config.accessions_json}",
         f"embeddings_path: {config.embeddings_npz}",
+        f"lookup_backend: {config.lookup_backend}",
+        f"faiss_cache_dir: {config.faiss_cache_dir}",
+        f"rebuild_faiss_index: {str(config.rebuild_faiss_index).lower()}",
+        f"lookup_batch_size: {config.lookup_batch_size}",
         f"limit_per_entry: {config.limit_per_entry}",
         "embedding:",
         f"  distance_metric: {config.distance_metric}",
@@ -1440,7 +1490,10 @@ def run_chunk_pipeline(
             "annotations_path": str(config.annotations_json),
             "accession_path": str(config.accessions_json),
             "embeddings_path": str(config.embeddings_npz),
-            "lookup_device": device,
+            "lookup_device": "cpu" if config.lookup_backend == "faiss" else device,
+            "lookup_backend": config.lookup_backend,
+            "faiss_cache_dir": str(config.faiss_cache_dir),
+            "rebuild_faiss_index": config.rebuild_faiss_index,
             "lookup_batch_size": config.lookup_batch_size,
             "limit_per_entry": config.limit_per_entry,
             "embedding": {"distance_metric": config.distance_metric},
@@ -1582,7 +1635,10 @@ def run_chunk_pipeline(
             "annotations_path": str(config.annotations_json),
             "accession_path": str(config.accessions_json),
             "embeddings_path": str(model_merged_emb),
-            "lookup_device": device,
+            "lookup_device": "cpu" if config.lookup_backend == "faiss" else device,
+            "lookup_backend": config.lookup_backend,
+            "faiss_cache_dir": str(config.faiss_cache_dir),
+            "rebuild_faiss_index": config.rebuild_faiss_index,
             "lookup_batch_size": config.lookup_batch_size,
             "limit_per_entry": config.limit_per_entry,
             "embedding": {"distance_metric": config.distance_metric},

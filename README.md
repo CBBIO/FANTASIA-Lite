@@ -47,7 +47,7 @@ For advanced features, large-scale annotation, or integration with external data
 
 ## What's New In V1.2
 
-Lite V1.2 adds an Apptainer workflow for offline HPC systems. It provides a CUDA image, a configurable site YAML, a node0-only asset preparation command, offline validation, and a Slurm launcher that mounts lookup data, model caches, inputs, outputs, and scratch storage explicitly. See [Apptainer on HPC systems](docs/apptainer_hpc.md).
+Lite V1.2 adds an Apptainer workflow for offline HPC systems. It provides a CUDA image, a configurable site YAML, a node0-only asset preparation command, offline validation, and a Slurm launcher that mounts lookup data, model caches, inputs, outputs, scratch storage, and a persistent FAISS index cache explicitly. See [Apptainer on HPC systems](docs/apptainer_hpc.md).
 
 ## What's New In V1.1
 
@@ -361,6 +361,8 @@ Each invocation creates `outputs_<timestamp>/`.
 | retrieve five donors | `--limit-per-entry 5` |
 | force GPU | `--device cuda --use-gpu-lookup` |
 | force CPU fallback | `--device cpu --no-gpu-lookup` |
+| use exact FAISS CPU lookup | `--lookup-backend faiss` |
+| choose a persistent FAISS cache | `--faiss-cache-dir PATH` |
 | use Ankh3-Large | `--serial-models --embed-models ankh3` |
 | reuse embeddings | `--reuse-embeddings --embeddings-npz FILE` |
 | enable TopGO | `--topgo` |
@@ -371,6 +373,40 @@ Show all options:
 ```bash
 python3 src/fantasia_pipeline.py --help
 ```
+
+### Exact FAISS CPU lookup and index cache
+
+The default CPU lookup backend is NumPy. Select `--lookup-backend faiss` to use
+FAISS flat indexes for exact CPU nearest-neighbour search. FAISS uses CPU lookup
+even when embeddings are generated on CUDA; do not combine it with
+`--use-gpu-lookup`.
+
+Indexes are cached under `data/lookup/faiss/` by default, with one index per
+reference model and distance metric. The cache is rebuilt automatically if the
+lookup archive metadata, model shape, metric, or FAISS version changes. Use a
+writable alternative when lookup data is read-only, and use
+`--rebuild-faiss-index` to force regeneration:
+
+```bash
+python3 src/fantasia_pipeline.py \
+  --lookup-backend faiss \
+  --faiss-cache-dir /scratch/fantasia-faiss \
+  --rebuild-faiss-index \
+  data/my_proteome.faa.gz
+```
+
+Prebuild an index before a batch run without generating query embeddings:
+
+```bash
+python3 src/build_faiss_indexes.py \
+  --lookup-npz data/lookup/lookup_table.npz \
+  --cache-dir data/lookup/faiss \
+  --models Prot-T5 \
+  --distance-metric cosine
+```
+
+FAISS flat indexes store a full copy of the selected reference vectors. Budget
+roughly the source embedding size again for each model/metric you prebuild.
 
 ## Results and provenance
 

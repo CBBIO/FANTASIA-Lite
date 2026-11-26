@@ -100,7 +100,7 @@ apptainer build --fakeroot dist/fantasia-lite-cuda128.sif containers/fantasia-li
 
 The image uses CUDA 12.8, Python 3.12, and PyTorch 2.7.1 with Blackwell support
 (including RTX 5090), as well as Ampere/Hopper support. The built-in
-test checks imports of PyTorch, Transformers, ESM-C, h5py, and PyYAML. A compute
+test checks imports of PyTorch, Transformers, ESM-C, FAISS, h5py, and PyYAML. A compute
 node needs a compatible NVIDIA driver, and the container must be invoked with
 `--nv`. The launcher adds this flag automatically when `runtime.use_nv: true`.
 
@@ -190,6 +190,14 @@ The FASTA file must be under `storage.inputs.host`. The launcher creates a
 subdirectory for each run under the output and scratch directories, mounts
 lookup data, models, and inputs as read-only, and sets `HF_HUB_OFFLINE=1`,
 `TRANSFORMERS_OFFLINE=1`, and `FANTASIA_OFFLINE=1`.
+
+`storage.faiss_cache` is a required writable persistent mount. It is not
+namespaced by run name, so exact FAISS CPU indexes can be reused across jobs
+while `storage.lookup` remains read-only. The launcher passes this directory as
+`--faiss-cache-dir`; request the backend with `--lookup-backend faiss` in the
+arguments after `--`. Build indexes ahead of time with
+`/opt/fantasia/src/build_faiss_indexes.py` inside the SIF, or allow the first FAISS job to
+create the needed model/metric index lazily.
 
 The Hugging Face variables disable model downloads. `FANTASIA_OFFLINE` is an
 environment marker; the unchanged application does not consume it. The launcher

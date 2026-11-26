@@ -32,10 +32,12 @@ import csv
 import re
 import math
 from collections import defaultdict
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from faiss_index_cache import FaissIndexCache, require_faiss
 try:
     import h5py  # type: ignore
 except ImportError:
@@ -126,7 +128,7 @@ class EmbeddingLookUpLocal:
 
     def __init__(self, conf: Dict):
         self.conf = conf
-        self.lookup_tables: Dict[str, Dict[str, np.ndarray]] = {}
+        self.lookup_tables: Dict[str, Dict[str, Any]] = {}
         self.go_annotations: Dict[str, List[Dict]] = {}
 
         # default parameters
@@ -139,6 +141,14 @@ class EmbeddingLookUpLocal:
                 f"Unsupported distance metric '{self.distance_metric}'. "
                 "Choose 'euclidean' or 'cosine'."
             )
+
+        self.lookup_backend = str(conf.get("lookup_backend", "numpy")).lower()
+        if self.lookup_backend not in {"numpy", "faiss"}:
+            raise ValueError(
+                f"Unsupported lookup backend '{self.lookup_backend}'. Choose 'numpy' or 'faiss'."
+            )
+        self.faiss_cache: FaissIndexCache | None = None
+        self.rebuild_faiss_index = bool(conf.get("rebuild_faiss_index", False))
 
         # output paths
         self.results_path = conf.get(
@@ -187,6 +197,16 @@ class EmbeddingLookUpLocal:
             model_prefixes = {"default"}
 
         metric = self.distance_metric
+        if self.lookup_backend == "faiss":
+            cache_dir = self.conf.get("faiss_cache_dir")
+            if cache_dir is None:
+                cache_dir = str(Path(path).resolve().parent / "faiss")
+            self.faiss_cache = FaissIndexCache(
+                path,
+                cache_dir,
+                metric,
+                rebuild=self.rebuild_faiss_index,
+            )
         for prefix in model_prefixes:
             ids_key = f"{prefix}_ids" if f"{prefix}_ids" in keys else "ids"
             embeds_key = (
@@ -202,16 +222,16 @@ class EmbeddingLookUpLocal:
                 raise ValueError(
                     f"Mismatched lengths for ids and embeddings in model '{prefix}'."
                 )
-            table: Dict[str, np.ndarray] = {"ids": ids, "embeddings": embeddings}
+            table: Dict[str, Any] = {"ids": ids, "embeddings": embeddings}
 
-            if metric == "cosine":
+            if self.lookup_backend == "numpy" and metric == "cosine":
                 norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
                 np.divide(
                     embeddings,
                     np.maximum(norms, 1e-12),
                     out=embeddings,
                 )
-            else:  # euclidean
+            elif self.lookup_backend == "numpy":  # euclidean
                 squared_norms = np.einsum("ij,ij->i", embeddings, embeddings, dtype=np.float32)
                 table["squared_norms"] = squared_norms
 
@@ -420,6 +440,29 @@ class EmbeddingLookUpLocal:
         top_values = distances[row_ids, top_idx]
         return top_values, top_idx
 
+    def _faiss_topk(
+        self, query_batch: np.ndarray, ref_table: Dict[str, Any], model_key: str
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Search an exact CPU FAISS flat index and convert scores to distances."""
+        if self.faiss_cache is None:
+            raise RuntimeError("FAISS cache was not configured for FAISS lookup.")
+        index = ref_table.get("faiss_index")
+        if index is None:
+            index = self.faiss_cache.load_or_build(model_key, ref_table["embeddings"])
+            ref_table["faiss_index"] = index
+
+        queries = np.array(query_batch, dtype=np.float32, order="C", copy=True)
+        if self.distance_metric == "cosine":
+            require_faiss().normalize_L2(queries)
+        n_refs = int(ref_table["embeddings"].shape[0])
+        k = min(self.limit_per_entry, n_refs) if self.limit_per_entry > 0 else n_refs
+        values, indices = index.search(queries, k)
+        if self.distance_metric == "cosine":
+            distances = 1.0 - values
+        else:
+            distances = np.sqrt(np.maximum(values, 0.0))
+        return distances, indices
+
     def _build_results(self, query_entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         grouped_queries: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         for entry in query_entries:
@@ -446,8 +489,13 @@ class EmbeddingLookUpLocal:
                 batch_embeddings = np.stack([item["embedding"] for item in batch]).astype(
                     np.float32, copy=False
                 )
-                distances = self._compute_batch_distances(batch_embeddings, ref_table)
-                top_values, top_indices = self._topk_indices(distances)
+                if self.lookup_backend == "faiss":
+                    top_values, top_indices = self._faiss_topk(
+                        batch_embeddings, ref_table, model_key
+                    )
+                else:
+                    distances = self._compute_batch_distances(batch_embeddings, ref_table)
+                    top_values, top_indices = self._topk_indices(distances)
 
                 for row_idx, query_item in enumerate(batch):
                     query_accession = query_item["query_accession"]

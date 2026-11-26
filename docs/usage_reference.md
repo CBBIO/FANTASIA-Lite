@@ -60,6 +60,15 @@ lookup batch size to 1,024.
 - `--max-batch-residues`: upper bound on padded residues per batch.
 - `--lookup-batch-size`: query vectors compared at once. It does not reduce the
   reference table being searched.
+- `--lookup-backend {numpy,faiss}`: choose the CPU lookup implementation;
+  NumPy remains the default and FAISS uses an exact flat index.
+- `--faiss-cache-dir`: persistent location for FAISS indexes. The default is
+  `faiss/` beside the lookup NPZ; use a writable override for read-only bundles.
+- `--rebuild-faiss-index`: ignore a compatible cached index and regenerate it.
+
+FAISS preserves cosine and Euclidean lookup semantics. Cosine uses a normalized
+inner-product index; Euclidean uses a flat L2 index and reports square-rooted
+distances. Choosing FAISS forces CPU lookup but does not prevent CUDA embedding.
 
 ## Model revisions and run provenance
 
