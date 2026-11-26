@@ -359,6 +359,7 @@ class EmbeddingLookUpLocalGPU:
                                     "query_sequence": query_sequence,
                                     "reference_id": ref_id,
                                     "model_key": model_key,
+                                    "neighbor_rank": rank_idx + 1,
                                     "distance": distance,
                                     "uniprot_accession": uniprot,
                                     "go_id": None,
@@ -376,6 +377,7 @@ class EmbeddingLookUpLocalGPU:
                                     "query_sequence": query_sequence,
                                     "reference_id": ref_id,
                                     "model_key": model_key,
+                                    "neighbor_rank": rank_idx + 1,
                                     "distance": distance,
                                     "uniprot_accession": uniprot,
                                     "go_id": anno.get("go_id"),
@@ -391,6 +393,7 @@ class EmbeddingLookUpLocalGPU:
         raw_columns = [
             "query_accession",
             "hit_rank",
+            "neighbor_rank",
             "reference_id",
             "model_key",
             "distance",
